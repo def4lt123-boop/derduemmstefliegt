@@ -294,8 +294,8 @@
      (Project Settings → API → Project URL / anon public key).
      Passendes SQL für die Tabelle liegt separat bereit.
   ---------------------------------------------- */
-  const SUPABASE_URL = "DEINE-PROJEKT-URL.supabase.co";
-  const SUPABASE_ANON_KEY = "DEIN-ANON-PUBLIC-KEY";
+  const SUPABASE_URL = "https://clvcrmgmhzdwqbfxrhqk.supabase.co";
+  const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsdmNybWdtaHpkd3FiZnhyaHFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2ODEyMTQsImV4cCI6MjEwMzI1NzIxNH0.ks7jMMKOMAJA0EjGpMHOTv1LstEMWltGr9f4rFVpa6k";
 
   const supabaseClient = (window.supabase && SUPABASE_URL.indexOf("DEINE-PROJEKT-URL")===-1)
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
