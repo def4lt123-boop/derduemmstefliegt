@@ -1218,40 +1218,48 @@
     };
   }
 
-  function finalePlayerRecap(player, f){
-    const items = f.details[player.id];
-    const score = items.filter(x=>x.mark==='right').length;
-    return `
-      <div class="card">
-        <div style="font-family:'Archivo Black',sans-serif;font-size:13px;color:var(--amber);text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px;">${escapeHtml(player.name)} · ${score} von ${items.length} richtig</div>
-        <div class="qlist" style="max-height:none;">
-          ${items.map((x,i)=>`
-            <div class="qitem">
-              <div class="qtext">
-                ${i+1}. ${escapeHtml(x.frage)}
-                <span class="a">Lösung: ${escapeHtml(x.antwort)}${x.anmerkung?` · <em>${escapeHtml(x.anmerkung)}</em>`:""}</span>
-                <span style="display:block;font-size:12px;margin-top:3px;color:${x.mark==='right'?'var(--teal)':'var(--danger)'};">
-                  ${x.mark==='right'?'✓':'✗'} geantwortet: ${x.given ? escapeHtml(x.given) : '<em style="color:var(--text-dim);">– keine Angabe –</em>'}
-                </span>
-              </div>
-            </div>
-          `).join("")}
+  function finaleQuestionRecap(f){
+    const [a,b] = f.players;
+    return f.questions.map((q,i)=>{
+      const da = f.details[a.id][i];
+      const db = f.details[b.id][i];
+      const line = (player, d) => `
+        <div style="font-size:12px;margin-top:4px;color:${d && d.mark==='right' ? 'var(--teal)' : 'var(--danger)'};">
+          <strong style="color:var(--text);">${escapeHtml(player.name)}:</strong>
+          ${d ? (d.mark==='right'?'✓':'✗') : '–'}
+          ${d && d.given ? escapeHtml(d.given) : '<em style="color:var(--text-dim);">– keine Angabe –</em>'}
         </div>
-      </div>
-    `;
+      `;
+      return `
+        <div class="qitem" style="flex-direction:column;align-items:stretch;">
+          <div class="qtext" style="margin:0;">
+            ${i+1}. ${escapeHtml(q.frage)}
+            <span class="a">Lösung: ${escapeHtml(q.antwort)}${q.anmerkung?` · <em>${escapeHtml(q.anmerkung)}</em>`:""}</span>
+          </div>
+          ${line(a, da)}
+          ${line(b, db)}
+        </div>
+      `;
+    }).join("");
   }
 
   function renderFinaleReview(){
     const f = state.finale;
     const [a,b] = f.players;
+    const scoreA = f.details[a.id].filter(x=>x.mark==='right').length;
+    const scoreB = f.details[b.id].filter(x=>x.mark==='right').length;
     app.innerHTML = `
       ${header()}
       <div class="card">
         <h2>${f.isTieBreak ? 'Tie-Break' : 'Finale'} — Übersicht</h2>
+        <p class="subtitle" style="margin:0 0 6px;">${escapeHtml(a.name)}: ${scoreA} von ${f.questions.length} richtig · ${escapeHtml(b.name)}: ${scoreB} von ${f.questions.length} richtig</p>
         <p class="subtitle" style="margin:0;">Wer hat gewonnen? Spieler antippen — oder bei Gleichstand auf „Weiter" für 5 weitere Fragen.</p>
       </div>
-      ${finalePlayerRecap(a, f)}
-      ${finalePlayerRecap(b, f)}
+      <div class="card">
+        <div class="qlist" style="max-height:none;">
+          ${finaleQuestionRecap(f)}
+        </div>
+      </div>
       <div class="vote-grid">
         <div class="vote-card" data-finwin="${a.id}">
           <div class="nm">🏆 ${escapeHtml(a.name)} gewinnt</div>
