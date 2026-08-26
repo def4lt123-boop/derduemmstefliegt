@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Der Dümmste fliegt – Quizmaster</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -29,11 +29,15 @@
     font-family:'Manrope',sans-serif;
     min-height:100vh;
     -webkit-font-smoothing:antialiased;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior-y:contain;
   }
   #app{
     max-width:920px;
     margin:0 auto;
-    padding:20px 16px 60px;
+    padding:20px 16px calc(60px + env(safe-area-inset-bottom));
+    padding-left:calc(16px + env(safe-area-inset-left));
+    padding-right:calc(16px + env(safe-area-inset-right));
   }
   .eyebrow{
     font-family:'Space Mono',monospace;
@@ -84,8 +88,8 @@
     border:1px solid var(--border);
     color:var(--text);
     font-family:'Manrope',sans-serif;
-    font-size:15px;
-    padding:11px 12px;
+    font-size:16px;
+    padding:12px 12px;
     border-radius:8px;
     outline:none;
   }
@@ -97,7 +101,8 @@
     font-weight:800;
     border:none;
     border-radius:9px;
-    padding:12px 18px;
+    padding:13px 18px;
+    min-height:44px;
     cursor:pointer;
     font-size:14px;
     letter-spacing:.02em;
@@ -110,7 +115,7 @@
   .btn-outline:hover{border-color:var(--amber);color:var(--amber);}
   .btn-teal{background:var(--teal);color:#052421;}
   .btn-danger{background:var(--danger);color:#2a0d05;}
-  .btn-ghost{background:transparent;color:var(--text-dim);padding:6px 8px;}
+  .btn-ghost{background:transparent;color:var(--text-dim);padding:8px;min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center;}
   .btn-ghost:hover{color:var(--danger);}
   .btn-block{width:100%;}
   .btn-lg{padding:16px 22px;font-size:16px;}
@@ -120,20 +125,20 @@
     background:var(--panel-2);
     border:1px dashed var(--amber-dim);
     border-radius:10px;
-    padding:8px 12px;
+    padding:6px 6px 6px 12px;
     display:flex;
     align-items:center;
-    gap:10px;
+    gap:6px;
     font-family:'Space Mono',monospace;
     font-size:13px;
   }
   .pass .flightno{color:var(--amber);}
-  .pass button{padding:2px 7px;font-size:12px;}
+  .pass button{padding:8px;font-size:13px;min-width:32px;min-height:32px;}
 
   details{border-top:1px solid var(--border);margin-top:16px;padding-top:14px;}
   summary{cursor:pointer;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-dim);}
   summary:hover{color:var(--amber);}
-  .qlist{margin-top:12px;display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;}
+  .qlist{margin-top:12px;display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;}
   .qitem{
     background:var(--panel-2);
     border:1px solid var(--border);
@@ -155,6 +160,9 @@
     overflow-x:auto;
     padding-bottom:6px;
     margin-bottom:18px;
+    -webkit-overflow-scrolling:touch;
+    overscroll-behavior-x:contain;
+    scroll-snap-type:x proximity;
   }
   .board-item{
     flex:0 0 auto;
@@ -164,6 +172,7 @@
     padding:10px 12px;
     min-width:132px;
     font-family:'Space Mono',monospace;
+    scroll-snap-align:start;
   }
   .board-item.out{opacity:.4;}
   .board-item.asking{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber) inset;}
@@ -197,7 +206,7 @@
     55%{transform:rotateX(-90deg);opacity:.3;}
     100%{transform:rotateX(0deg);opacity:1;}
   }
-  .timer-controls{display:flex;gap:10px;justify-content:center;margin-top:12px;}
+  .timer-controls{display:flex;gap:10px;justify-content:center;margin-top:12px;flex-wrap:wrap;}
 
   .qcard{text-align:center;padding:30px 20px;}
   .qcard .qnum{font-family:'Space Mono',monospace;color:var(--text-dim);font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;}
@@ -542,6 +551,7 @@
     if(state.phase==="finale-tiebreak-intro") return renderFinaleTiebreakIntro();
     if(state.phase==="finale-question") return renderFinaleQuestion();
     if(state.phase==="finale-handoff") return renderFinaleHandoff();
+    if(state.phase==="finale-review") return renderFinaleReview();
     if(state.phase==="finale-result") return renderFinaleResult();
     if(state.phase==="winner") return renderWinner();
   }
@@ -821,7 +831,7 @@
     const players = active.slice(0,2);
     const scores = {}, details = {};
     players.forEach(p=>{ scores[p.id]=0; details[p.id]=[]; });
-    state.finale = { players, questions: chosen, turn: 0, qIndex: 0, scores, details, isTieBreak:false };
+    state.finale = { players, questions: chosen, turn: 0, qIndex: 0, scores, details, isTieBreak:false, winnerId:null };
     state.phase = "finale-intro";
     render();
   }
@@ -1182,13 +1192,7 @@
         f.qIndex = 0;
         state.phase = "finale-handoff";
       }else{
-        const scoreA = f.details[f.players[0].id].filter(x=>x.mark==='right').length;
-        const scoreB = f.details[f.players[1].id].filter(x=>x.mark==='right').length;
-        if(scoreA===scoreB){
-          startTieBreak();
-          return;
-        }
-        state.phase = "finale-result";
+        state.phase = "finale-review";
       }
     }
     render();
@@ -1214,19 +1218,94 @@
     };
   }
 
+  function finalePlayerRecap(player, f){
+    const items = f.details[player.id];
+    const score = items.filter(x=>x.mark==='right').length;
+    return `
+      <div class="card">
+        <div style="font-family:'Archivo Black',sans-serif;font-size:13px;color:var(--amber);text-transform:uppercase;letter-spacing:.03em;margin-bottom:10px;">${escapeHtml(player.name)} · ${score} von ${items.length} richtig</div>
+        <div class="qlist" style="max-height:none;">
+          ${items.map((x,i)=>`
+            <div class="qitem">
+              <div class="qtext">
+                ${i+1}. ${escapeHtml(x.frage)}
+                <span class="a">Lösung: ${escapeHtml(x.antwort)}${x.anmerkung?` · <em>${escapeHtml(x.anmerkung)}</em>`:""}</span>
+                <span style="display:block;font-size:12px;margin-top:3px;color:${x.mark==='right'?'var(--teal)':'var(--danger)'};">
+                  ${x.mark==='right'?'✓':'✗'} geantwortet: ${x.given ? escapeHtml(x.given) : '<em style="color:var(--text-dim);">– keine Angabe –</em>'}
+                </span>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFinaleReview(){
+    const f = state.finale;
+    const [a,b] = f.players;
+    app.innerHTML = `
+      ${header()}
+      <div class="card">
+        <h2>${f.isTieBreak ? 'Tie-Break' : 'Finale'} — Übersicht</h2>
+        <p class="subtitle" style="margin:0;">Wer hat gewonnen? Spieler antippen — oder bei Gleichstand auf „Weiter" für 5 weitere Fragen.</p>
+      </div>
+      ${finalePlayerRecap(a, f)}
+      ${finalePlayerRecap(b, f)}
+      <div class="vote-grid">
+        <div class="vote-card" data-finwin="${a.id}">
+          <div class="nm">🏆 ${escapeHtml(a.name)} gewinnt</div>
+        </div>
+        <div class="vote-card" data-finwin="${b.id}">
+          <div class="nm">🏆 ${escapeHtml(b.name)} gewinnt</div>
+        </div>
+      </div>
+      <button class="btn-outline btn-block" id="finTieBtn" style="margin-top:12px;">Unentschieden — weiter mit 5 Fragen</button>
+    `;
+    app.querySelectorAll("[data-finwin]").forEach(el=>{
+      el.onclick = ()=> confirmFinaleWinner(el.dataset.finwin);
+    });
+    document.getElementById("finTieBtn").onclick = startTieBreak;
+  }
+
+  function confirmFinaleWinner(playerId){
+    const f = state.finale;
+    const p = f.players.find(x=>x.id===playerId);
+    if(!p) return;
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="eyebrow" style="justify-content:center;">Bestätigen</div>
+        <h2 style="font-family:'Archivo Black',sans-serif;margin:8px 0;">${escapeHtml(p.name)} gewinnt das Finale?</h2>
+        <p class="subtitle" style="margin:0;">Beendet das Spiel.</p>
+        <div class="mbtns">
+          <button class="btn-outline" id="cancelFinWin">Abbrechen</button>
+          <button class="btn-amber" id="confirmFinWinBtn">Ja, gewonnen</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById("cancelFinWin").onclick = ()=> overlay.remove();
+    document.getElementById("confirmFinWinBtn").onclick = ()=>{
+      overlay.remove();
+      f.winnerId = p.id;
+      state.phase = "finale-result";
+      render();
+    };
+  }
+
   function renderFinaleResult(){
     const f = state.finale;
     const [a,b] = f.players;
     const scoreA = f.details[a.id].filter(x=>x.mark==='right').length;
     const scoreB = f.details[b.id].filter(x=>x.mark==='right').length;
-    let winnerName = null;
-    if(scoreA>scoreB) winnerName = a.name;
-    else if(scoreB>scoreA) winnerName = b.name;
+    const winner = f.players.find(p=>p.id===f.winnerId);
     app.innerHTML = `
       ${header()}
       <div class="card winner" id="winnerCard">
         <div class="trophy">🏆</div>
-        <h2>${winnerName ? escapeHtml(winnerName)+" gewinnt das Finale!" : "Unentschieden!"}</h2>
+        <h2>${winner ? escapeHtml(winner.name)+" gewinnt das Finale!" : "Unentschieden!"}</h2>
         <p>${escapeHtml(a.name)}: ${scoreA} von ${f.questions.length} richtig · ${escapeHtml(b.name)}: ${scoreB} von ${f.questions.length} richtig</p>
         <button class="btn-amber btn-lg" id="newGameBtn" style="margin-top:18px;">Neues Spiel</button>
       </div>
