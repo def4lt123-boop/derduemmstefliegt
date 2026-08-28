@@ -291,32 +291,76 @@
   @media (max-width:480px){
     .qbtns button{flex:1 1 100%;}
   }
+  .qr-box{background:#fff;border-radius:14px;padding:16px;display:inline-block;margin:10px auto;}
+  .join-link{
+    font-family:'Space Mono',monospace;
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:12px;
+    word-break:break-all;
+    font-size:13px;
+    color:var(--teal);
+    text-align:center;
+  }
+  .lobby-player{
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:12px 14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:8px;
+    font-family:'Space Mono',monospace;
+  }
+  .big-status{
+    text-align:center;
+    padding:50px 20px;
+  }
+  .big-status .icon{font-size:48px;margin-bottom:14px;}
+  .big-status h2{font-family:'Archivo Black',sans-serif;font-size:clamp(22px,6vw,32px);margin:0 0 8px;}
+  .vote-tally{
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:10px 12px;
+    margin-bottom:8px;
+    display:flex;
+    justify-content:space-between;
+    font-family:'Space Mono',monospace;
+    font-size:13px;
+  }
+  .placement-badge{
+    font-family:'Archivo Black',sans-serif;
+    font-size:clamp(40px,12vw,64px);
+    color:var(--amber);
+    margin:8px 0;
+  }
+  .answer-waiting{
+    text-align:center;
+    color:var(--text-dim);
+    font-family:'Space Mono',monospace;
+    font-size:13px;
+    padding:20px;
+  }
 </style>
-</head>
-<body>
-<div id="app"><div style="max-width:920px;margin:0 auto;padding:60px 16px;text-align:center;color:#8b93a7;font-family:'Space Mono',monospace;font-size:13px;">Lade Fragen-Datenbank …</div></div>
+<div id="app"><div style="max-width:920px;margin:0 auto;padding:60px 16px;text-align:center;color:#8b93a7;font-family:'Space Mono',monospace;font-size:13px;">Lade …</div></div>
 
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 (function(){
   "use strict";
 
-  /* ---------- Supabase-Konfiguration ----------
-     Trage hier die Daten deines Supabase-Projekts ein
-     (Project Settings → API → Project URL / anon public key).
-     Passendes SQL für die Tabelle liegt separat bereit.
-  ---------------------------------------------- */
+  /* ---------- Supabase-Konfiguration ---------- */
   const SUPABASE_URL = "https://clvcrmgmhzdwqbfxrhqk.supabase.co";
   const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsdmNybWdtaHpkd3FiZnhyaHFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2ODEyMTQsImV4cCI6MjEwMzI1NzIxNH0.ks7jMMKOMAJA0EjGpMHOTv1LstEMWltGr9f4rFVpa6k";
-
-  const supabaseClient = (window.supabase && SUPABASE_URL.indexOf("DEINE-PROJEKT-URL")===-1)
+  const supabaseClient = (window.supabase)
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
     : null;
 
-  /* ---------- Start-Fragen -----------
-     Werden nur einmalig verwendet, falls die Supabase-Tabelle beim allerersten
-     Laden noch leer ist (siehe seedIfEmpty weiter unten).
-  ------------------------------------------- */
+  /* ---------- Fragen-Datenbank (Start-Fragen, nur falls Supabase-Tabelle leer) ---------- */
   const SEED_QUESTIONS = [
     {frage:"Wie viele Bundesländer hat Österreich?", antwort:"9"},
     {frage:"Welcher Fluss fließt durch Wien?", antwort:"Die Donau"},
@@ -345,90 +389,102 @@
     {frage:"Wie viele Minuten dauert eine Fußball-Halbzeit regulär?", antwort:"45 Minuten"}
   ];
 
-  const STORAGE_KEY = "ddf_questions_db"; // Fallback-Key, falls Supabase nicht konfiguriert ist
+  /* ---------------- Rollen-Erkennung über URL ---------------- */
+  const urlParams = new URLSearchParams(window.location.search);
+  const joinCode = urlParams.get("join");
+  const ROLE = joinCode ? "player" : "host";
 
   /* ---------------- State ---------------- */
   let state = {
-    phase: "setup",           // setup | round | voting | stamp | winner
-    players: [],              // {id,name,flightNo,hearts,out}
-    roundMinutes: 3,
-    questions: [],             // die dauerhafte Fragen-Datenbank (500+), inkl. used-Flag
-    deck: [],                 // shuffled queue der UNVERWENDETEN Fragen für die laufende Partie
-    roundLog: [],             // {frage,antwort,anmerkung,mark,playerId,playerName}
-    currentQ: null,
-    currentPlayer: null,       // wer wird gerade gefragt (rotiert reihum)
-    turnIndex: 0,              // fortlaufender Zähler für die Reihum-Zuteilung
-    timeLeft: 0,
-    timerId: null,
-    running: false,
-    voteTarget: null,
-    stampName: "",
+    role: ROLE,
+    code: joinCode ? joinCode.toUpperCase() : null,
+    myPlayerId: null,          // eigene Spieler-ID (nur role=player)
+    myName: "",
+    session: null,             // Mirror von game_sessions
+    players: [],               // Mirror von session_players
+    votes: [],                 // Mirror von round_votes (aktuelle Runde, nur Host braucht das)
+    finaleAnswers: [],         // Mirror von finale_answers (aktuelle Frage, nur Host)
+    allFinaleAnswers: [],      // Mirror aller finale_answers der Session (für die Finale-Übersicht)
+    questions: [],             // Fragen-Datenbank (nur Host, für Verwaltung + Ziehen)
     loadError: null,
-    finale: null           // {players:[a,b], questions:[...10], turn, qIndex, scores, details}
+    roundMinutes: 3,
+    channel: null,
+    tickId: null
   };
 
-  /* ------------- Fragen-Datenbank: Supabase (mit Fallback) -------------
-     Fragen bleiben dauerhaft in Supabase gespeichert (Tabelle "questions").
-     Jede Frage hat ein "used"-Flag: einmal in einer Partie gestellt, wird sie
-     nicht mehr gezogen — auch nicht in späteren Partien — bis der
-     "Fragen-Pool zurücksetzen"-Button gedrückt wird.
-     Ohne gültige SUPABASE_URL/KEY läuft die App mit einem lokalen Fallback
-     weiter (window.storage), damit hier nichts abstürzt.
-  ------------------------------------------------------------------- */
+  /* ---------------- Helpers ---------------- */
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+  function shuffle(arr){
+    const a = arr.slice();
+    for(let i=a.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [a[i],a[j]]=[a[j],a[i]];
+    }
+    return a;
+  }
+  function pad(n){ return n.toString().padStart(2,"0"); }
+  function fmt(sec){
+    sec = Math.max(0, Math.round(sec));
+    const m = Math.floor(sec/60), s = sec%60;
+    return pad(m)+":"+pad(s);
+  }
+  function uid(){ return Math.random().toString(36).slice(2,9); }
+  function makeRoomCode(){
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // ohne 0/O/1/I
+    let out = "";
+    for(let i=0;i<6;i++) out += chars[Math.floor(Math.random()*chars.length)];
+    return out;
+  }
+  function secsUntil(iso){
+    if(!iso) return 0;
+    return (new Date(iso).getTime() - Date.now())/1000;
+  }
+  function activePlayers(){ return state.players.filter(p=>!p.is_out); }
+  function joinUrl(code){
+    return window.location.origin + window.location.pathname + "?join=" + code;
+  }
+
+  /* ---------------- Fragen-Datenbank: Supabase (Host) ---------------- */
   async function loadQuestions(){
     state.loadError = null;
-    if(supabaseClient){
-      try{
-        const { data, error } = await supabaseClient.from("questions").select("*").order("id",{ascending:true});
-        if(error) throw error;
-        if(data && data.length>0){
-          state.questions = data;
-        }else{
-          await seedIfEmpty();
-        }
-        return;
-      }catch(e){
-        state.loadError = "Verbindung zu Supabase fehlgeschlagen: " + (e.message||e) + " — es wird lokal weitergespielt, bis das behoben ist.";
-      }
+    if(!supabaseClient){
+      state.loadError = "Supabase ist nicht konfiguriert.";
+      state.questions = [];
+      return;
     }
-    // Fallback: lokaler Artefakt-Speicher (nicht dauerhaft außerhalb von Claude)
     try{
-      const res = await window.storage.get(STORAGE_KEY, false);
-      state.questions = (res && res.value) ? JSON.parse(res.value) : SEED_QUESTIONS.map(q=>Object.assign({id:uid()}, q, {used:false}));
+      const { data, error } = await supabaseClient.from("questions").select("*").order("id",{ascending:true});
+      if(error) throw error;
+      if(data && data.length>0){
+        state.questions = data;
+      }else{
+        const rows = SEED_QUESTIONS.map(q=>({frage:q.frage, antwort:q.antwort, anmerkung:null, used:false}));
+        const ins = await supabaseClient.from("questions").insert(rows).select();
+        state.questions = ins.error ? [] : ins.data;
+      }
     }catch(e){
-      state.questions = SEED_QUESTIONS.map(q=>Object.assign({id:uid()}, q, {used:false}));
-    }
-    if(!supabaseClient && !state.loadError){
-      state.loadError = "Supabase ist noch nicht konfiguriert (SUPABASE_URL / SUPABASE_ANON_KEY oben im Code eintragen). Fragen werden vorübergehend lokal gespeichert.";
+      state.loadError = "Verbindung zu Supabase fehlgeschlagen: " + (e.message||e);
+      state.questions = [];
     }
   }
 
-  async function seedIfEmpty(){
-    const rows = SEED_QUESTIONS.map(q=>({frage:q.frage, antwort:q.antwort, anmerkung:null, used:false}));
-    const { data, error } = await supabaseClient.from("questions").insert(rows).select();
-    state.questions = error ? [] : data;
-  }
-
-  async function persistFallback(){
-    if(supabaseClient) return;
-    try{ await window.storage.set(STORAGE_KEY, JSON.stringify(state.questions), false); }catch(e){}
+  function toQId(raw){
+    const n = Number(raw);
+    return !isNaN(n) ? n : raw;
   }
 
   async function commitQuestion(frage, antwort, anmerkung){
-    if(supabaseClient){
-      try{
-        const { data, error } = await supabaseClient.from("questions")
-          .insert({frage, antwort, anmerkung: anmerkung || null, used:false})
-          .select().single();
-        if(error) throw error;
-        state.questions.push(data);
-      }catch(e){
-        alert("Speichern in Supabase fehlgeschlagen: "+(e.message||e));
-        return;
-      }
-    }else{
-      state.questions.push({id:uid(), frage, antwort, anmerkung: anmerkung||null, used:false});
-      await persistFallback();
+    try{
+      const { data, error } = await supabaseClient.from("questions")
+        .insert({frage, antwort, anmerkung: anmerkung||null, used:false})
+        .select().single();
+      if(error) throw error;
+      state.questions.push(data);
+    }catch(e){
+      alert("Speichern fehlgeschlagen: "+(e.message||e));
+      return;
     }
     render();
   }
@@ -436,63 +492,40 @@
   async function deleteQuestion(id){
     state.questions = state.questions.filter(q=>q.id!==id);
     render();
-    if(supabaseClient){
-      try{ await supabaseClient.from("questions").delete().eq("id", id); }
-      catch(e){ /* lokal schon entfernt, still fine */ }
-    }else{
-      await persistFallback();
-    }
+    try{ await supabaseClient.from("questions").delete().eq("id", id); }catch(e){}
   }
 
-  async function markUsed(id){
+  async function markUsedRemote(id){
     const q = state.questions.find(x=>x.id===id);
     if(q) q.used = true;
-    if(supabaseClient){
-      try{ await supabaseClient.from("questions").update({used:true}).eq("id", id); }
-      catch(e){ /* nicht kritisch, lokal schon markiert */ }
-    }else{
-      await persistFallback();
-    }
+    try{ await supabaseClient.from("questions").update({used:true}).eq("id", id); }catch(e){}
   }
 
   async function resetQuestionPool(){
     state.questions.forEach(q=>q.used=false);
     render();
-    if(supabaseClient){
-      try{ await supabaseClient.from("questions").update({used:false}).eq("used", true); }
-      catch(e){ alert("Zurücksetzen in Supabase fehlgeschlagen: "+(e.message||e)); }
-    }else{
-      await persistFallback();
-    }
+    try{ await supabaseClient.from("questions").update({used:false}).eq("used", true); }
+    catch(e){ alert("Zurücksetzen fehlgeschlagen: "+(e.message||e)); }
   }
 
-  /* ------------- Ähnlichkeits-Check für Duplikate ------------- */
-  function normalizeText(s){
-    return s.toLowerCase().replace(/[^\wäöüß\s]/gi," ").replace(/\s+/g," ").trim();
-  }
-  function wordSet(s){
-    return new Set(normalizeText(s).split(" ").filter(Boolean));
-  }
+  /* ---------- Duplikat-Check (Jaccard + Levenshtein), unverändert ---------- */
+  function normalizeText(s){ return s.toLowerCase().replace(/[^\wäöüß\s]/gi," ").replace(/\s+/g," ").trim(); }
+  function wordSet(s){ return new Set(normalizeText(s).split(" ").filter(Boolean)); }
   function jaccard(a,b){
     const sa=wordSet(a), sb=wordSet(b);
     if(sa.size===0 || sb.size===0) return 0;
-    let inter=0;
-    sa.forEach(w=>{ if(sb.has(w)) inter++; });
+    let inter=0; sa.forEach(w=>{ if(sb.has(w)) inter++; });
     const union = sa.size + sb.size - inter;
     return union===0 ? 0 : inter/union;
   }
   function levenshtein(a,b){
     const al=a.length, bl=b.length;
-    if(al===0) return bl;
-    if(bl===0) return al;
-    const dp = [];
-    for(let i=0;i<=al;i++) dp.push([i]);
+    if(al===0) return bl; if(bl===0) return al;
+    const dp = []; for(let i=0;i<=al;i++) dp.push([i]);
     for(let j=1;j<=bl;j++) dp[0][j]=j;
-    for(let i=1;i<=al;i++){
-      for(let j=1;j<=bl;j++){
-        const cost = a[i-1]===b[j-1] ? 0 : 1;
-        dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
-      }
+    for(let i=1;i<=al;i++) for(let j=1;j<=bl;j++){
+      const cost = a[i-1]===b[j-1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
     }
     return dp[al][bl];
   }
@@ -504,249 +537,357 @@
   function findSimilar(newFrage){
     return state.questions
       .map(q=>({q, score: Math.max(jaccard(newFrage,q.frage), levSim(newFrage,q.frage))}))
-      .filter(x=>x.score>=0.55)
-      .sort((a,b)=>b.score-a.score)
-      .slice(0,4);
+      .filter(x=>x.score>=0.55).sort((a,b)=>b.score-a.score).slice(0,4);
   }
 
-  /* ---------------- Helpers ---------------- */
-  function uid(){ return Math.random().toString(36).slice(2,9); }
-  function shuffle(arr){
-    const a = arr.slice();
-    for(let i=a.length-1;i>0;i--){
-      const j = Math.floor(Math.random()*(i+1));
-      [a[i],a[j]]=[a[j],a[i]];
-    }
-    return a;
+  /* ============================================================
+     REALTIME: Sync mit Supabase
+     ============================================================ */
+  async function fetchSession(){
+    const { data } = await supabaseClient.from("game_sessions").select("*").eq("code", state.code).single();
+    state.session = data || null;
   }
-  function pad(n){ return n.toString().padStart(2,"0"); }
-  function fmt(sec){
-    const m = Math.floor(sec/60), s = sec%60;
-    return pad(m)+":"+pad(s);
+  async function fetchPlayers(){
+    const { data } = await supabaseClient.from("session_players").select("*").eq("session_code", state.code).order("joined_at",{ascending:true});
+    state.players = data || [];
   }
-  function activePlayers(){ return state.players.filter(p=>!p.out); }
+  async function fetchVotes(){
+    if(!state.session) return;
+    const { data } = await supabaseClient.from("round_votes").select("*").eq("session_code", state.code).eq("round_number", state.session.round_number);
+    state.votes = data || [];
+  }
+  async function fetchFinaleAnswers(){
+    if(!state.session) return;
+    const { data } = await supabaseClient.from("finale_answers").select("*").eq("session_code", state.code).eq("question_index", state.session.finale_question_index);
+    state.finaleAnswers = data || [];
+  }
+  async function fetchAllFinaleAnswers(){
+    if(!state.session) return;
+    const { data } = await supabaseClient.from("finale_answers").select("*").eq("session_code", state.code).order("question_index",{ascending:true});
+    state.allFinaleAnswers = data || [];
+  }
 
-  function drawQuestion(){
-    if(state.deck.length===0){
-      return {id:null, frage:"Keine unverwendeten Fragen mehr übrig. Bitte im Check-in auf „Fragen-Pool zurücksetzen“ tippen.", antwort:"–", anmerkung:null};
-    }
-    return state.deck.pop();
+  async function syncAll(){
+    await fetchSession();
+    if(!state.session){ render(); return; }
+    await fetchPlayers();
+    if(state.role==="host" && state.session.phase==="voting") await fetchVotes();
+    if(state.session.phase==="finale-question") await fetchFinaleAnswers();
+    if(state.role==="host" && state.session.phase==="finale-review") await fetchAllFinaleAnswers();
+    render();
   }
 
-  function assignQuestion(){
+  function subscribeRealtime(){
+    if(state.channel) return;
+    state.channel = supabaseClient.channel("room-"+state.code)
+      .on("postgres_changes", {event:"*", schema:"public", table:"game_sessions", filter:`code=eq.${state.code}`}, syncAll)
+      .on("postgres_changes", {event:"*", schema:"public", table:"session_players", filter:`session_code=eq.${state.code}`}, syncAll)
+      .on("postgres_changes", {event:"*", schema:"public", table:"round_votes", filter:`session_code=eq.${state.code}`}, syncAll)
+      .on("postgres_changes", {event:"*", schema:"public", table:"finale_answers", filter:`session_code=eq.${state.code}`}, syncAll)
+      .subscribe();
+  }
+
+  /* ============================================================
+     HOST-Aktionen
+     ============================================================ */
+  async function hostCreateSession(){
+    const code = makeRoomCode();
+    const { error } = await supabaseClient.from("game_sessions").insert({
+      code, phase:"lobby", round_seconds: state.roundMinutes*60
+    });
+    if(error){ alert("Raum konnte nicht erstellt werden: "+error.message); return; }
+    state.code = code;
+    subscribeRealtime();
+    await syncAll();
+  }
+
+  async function hostStartGame(){
     const active = activePlayers();
-    state.currentPlayer = active.length ? active[state.turnIndex % active.length] : null;
-    state.currentQ = drawQuestion();
+    if(active.length<2) return;
+    if(active.length===2){
+      await hostStartFinale();
+      return;
+    }
+    await hostBeginRound();
   }
 
-  /* ---------------- Rendering ---------------- */
+  async function hostBeginRound(){
+    const unused = state.questions.filter(q=>!q.used);
+    if(unused.length===0){ alert("Alle Fragen wurden bereits verwendet. Bitte Fragen-Pool zurücksetzen."); return; }
+    const active = activePlayers();
+    const nextTurn = (state.session.turn_index||0);
+    const player = active[nextTurn % active.length];
+    const q = shuffle(unused)[0];
+    const roundNumber = (state.session.round_number||0) + 1;
+    await supabaseClient.from("game_sessions").update({
+      phase:"round",
+      round_number: roundNumber,
+      round_ends_at: new Date(Date.now() + state.session.round_seconds*1000).toISOString(),
+      current_question: {id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung},
+      current_target_player_id: player.id,
+      turn_index: nextTurn
+    }).eq("code", state.code);
+    state._roundLog = [];
+  }
+
+  async function hostNextQuestion(mark){
+    const cq = state.session.current_question;
+    const targetId = state.session.current_target_player_id;
+    if(cq && cq.id!=null){
+      const target = state.players.find(p=>p.id===targetId);
+      state._roundLog = state._roundLog || [];
+      state._roundLog.push({frage:cq.frage, antwort:cq.antwort, anmerkung:cq.anmerkung, mark, playerName: target?target.name:"–"});
+      markUsedRemote(cq.id);
+    }
+    const unused = state.questions.filter(q=>!q.used);
+    const active = activePlayers();
+    const nextTurn = (state.session.turn_index||0) + 1;
+    const player = active[nextTurn % active.length];
+    let update;
+    if(unused.length===0){
+      update = { current_question: {id:null, frage:"Keine unverwendeten Fragen mehr übrig.", antwort:"–", anmerkung:null}, turn_index: nextTurn, current_target_player_id: player.id };
+    }else{
+      const q = shuffle(unused)[0];
+      update = { current_question: {id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung}, turn_index: nextTurn, current_target_player_id: player.id };
+    }
+    await supabaseClient.from("game_sessions").update(update).eq("code", state.code);
+  }
+
+  async function hostEndRound(){
+    await supabaseClient.from("game_sessions").update({
+      phase:"voting",
+      voting_opens_at: new Date(Date.now() + 60000).toISOString()
+    }).eq("code", state.code);
+  }
+
+  async function hostConfirmElimination(playerId){
+    const p = state.players.find(x=>x.id===playerId);
+    if(!p) return;
+    const newHearts = p.hearts - 1;
+    if(newHearts<=0){
+      const placement = activePlayers().length; // Anzahl noch Aktiver inkl. diesem = seine Platzierung
+      await supabaseClient.from("session_players").update({hearts:0, is_out:true, placement}).eq("id", playerId);
+      await supabaseClient.from("game_sessions").update({phase:"stamp", stamp_player_id: playerId}).eq("code", state.code);
+      setTimeout(async ()=>{
+        await fetchPlayers();
+        const remaining = activePlayers();
+        if(remaining.length<=1){
+          const winner = remaining[0];
+          if(winner) await supabaseClient.from("session_players").update({placement:1}).eq("id", winner.id);
+          await supabaseClient.from("game_sessions").update({phase:"winner"}).eq("code", state.code);
+        }else if(remaining.length===2){
+          await hostStartFinale();
+        }else{
+          await hostBeginRound();
+        }
+      }, 1600);
+    }else{
+      await supabaseClient.from("session_players").update({hearts:newHearts}).eq("id", playerId);
+      await hostBeginRound();
+    }
+  }
+
+  async function hostStartFinale(){
+    const unused = state.questions.filter(q=>!q.used);
+    if(unused.length===0){
+      alert("Keine unverwendeten Fragen mehr für das Finale übrig.");
+      return;
+    }
+    const count = Math.min(10, unused.length);
+    const chosen = shuffle(unused).slice(0, count).map(q=>({id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung}));
+    const active = activePlayers();
+    await supabaseClient.from("game_sessions").update({
+      phase:"finale-intro",
+      finale_player_ids: active.map(p=>p.id),
+      finale_questions: chosen,
+      finale_question_index: 0,
+      finale_winner_id: null
+    }).eq("code", state.code);
+  }
+
+  async function hostBeginFinaleQuestionPhase(){
+    await supabaseClient.from("game_sessions").update({ phase:"finale-question" }).eq("code", state.code);
+  }
+
+  async function hostMarkFinaleAnswer(playerId, mark){
+    const idx = state.session.finale_question_index;
+    await supabaseClient.from("finale_answers")
+      .update({ mark })
+      .eq("session_code", state.code)
+      .eq("question_index", idx)
+      .eq("player_id", playerId);
+  }
+
+  async function hostAdvanceFinale(){
+    const s = state.session;
+    const q = s.finale_questions[s.finale_question_index];
+    if(q && q.id!=null) markUsedRemote(q.id);
+    const nextIndex = s.finale_question_index + 1;
+    if(nextIndex >= s.finale_questions.length){
+      await supabaseClient.from("game_sessions").update({ phase:"finale-review" }).eq("code", state.code);
+    }else{
+      await supabaseClient.from("game_sessions").update({ finale_question_index: nextIndex }).eq("code", state.code);
+    }
+  }
+
+  async function hostStartFinaleTieBreak(){
+    const unused = state.questions.filter(q=>!q.used);
+    if(unused.length===0){
+      alert("Keine unverwendeten Fragen mehr übrig — Unentschieden bleibt bestehen.");
+      return;
+    }
+    const count = Math.min(5, unused.length);
+    const extra = shuffle(unused).slice(0, count).map(q=>({id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung}));
+    const s = state.session;
+    const newQuestions = (s.finale_questions||[]).concat(extra);
+    await supabaseClient.from("game_sessions").update({
+      phase:"finale-tiebreak-intro",
+      finale_questions: newQuestions,
+      finale_question_index: s.finale_questions.length // Zeiger setzt genau bei den neuen Fragen an
+    }).eq("code", state.code);
+  }
+
+  async function hostConfirmFinaleWinner(playerId){
+    const loser = state.session.finale_player_ids.find(id=>id!==playerId);
+    await supabaseClient.from("session_players").update({placement:1}).eq("id", playerId);
+    if(loser) await supabaseClient.from("session_players").update({placement:2}).eq("id", loser);
+    await supabaseClient.from("game_sessions").update({ phase:"finale-result", finale_winner_id: playerId }).eq("code", state.code);
+  }
+
+  /* ============================================================
+     PLAYER-Aktionen
+     ============================================================ */
+  async function playerJoin(name){
+    name = name.trim();
+    if(!name) return;
+    const { data, error } = await supabaseClient.from("session_players")
+      .insert({session_code: state.code, name, hearts:3})
+      .select().single();
+    if(error){ alert("Beitreten fehlgeschlagen: "+error.message); return; }
+    state.myPlayerId = data.id;
+    state.myName = name;
+    subscribeRealtime();
+    await syncAll();
+  }
+
+  async function playerVote(targetId){
+    try{
+      await supabaseClient.from("round_votes").insert({
+        session_code: state.code,
+        round_number: state.session.round_number,
+        voter_id: state.myPlayerId,
+        target_id: targetId
+      });
+    }catch(e){}
+    render();
+  }
+
+  async function playerSubmitFinaleAnswer(text){
+    try{
+      await supabaseClient.from("finale_answers").upsert({
+        session_code: state.code,
+        question_index: state.session.finale_question_index,
+        player_id: state.myPlayerId,
+        given_answer: text,
+        mark: null
+      }, { onConflict: "session_code,question_index,player_id" });
+    }catch(e){}
+    await syncAll();
+  }
+
+  /* ============================================================
+     RENDER
+     ============================================================ */
   const app = document.getElementById("app");
 
-  function render(){
-    if(state.phase==="setup") return renderSetup();
-    if(state.phase==="round") return renderRound();
-    if(state.phase==="voting") return renderVoting();
-    if(state.phase==="stamp") return renderStamp();
-    if(state.phase==="finale-intro") return renderFinaleIntro();
-    if(state.phase==="finale-tiebreak-intro") return renderFinaleTiebreakIntro();
-    if(state.phase==="finale-question") return renderFinaleQuestion();
-    if(state.phase==="finale-handoff") return renderFinaleHandoff();
-    if(state.phase==="finale-review") return renderFinaleReview();
-    if(state.phase==="finale-result") return renderFinaleResult();
-    if(state.phase==="winner") return renderWinner();
-  }
-
   function header(){
-    return `
-      <div class="eyebrow">Departures · Quizmaster</div>
-      <h1 class="title">Der Dümmste fliegt</h1>
-    `;
+    return `<div class="eyebrow">Departures · ${state.role==="host"?"Quizmaster":"Spieler"}</div><h1 class="title">Der Dümmste fliegt</h1>`;
   }
 
   function boardStrip(askingId){
-    return `
-      <div class="board">
-        ${state.players.map(p=>`
-          <div class="board-item ${p.out?'out':''} ${p.id===askingId?'asking':''}">
-            <div class="fn">${p.flightNo}</div>
-            <div class="nm">${escapeHtml(p.name)}</div>
-            <div class="hearts">${'❤'.repeat(p.hearts)}${'♡'.repeat(3-p.hearts)}</div>
-            <div class="status">${p.out?'✈ abgeflogen':(p.id===askingId?'jetzt dran':'boarding')}</div>
-          </div>
-        `).join("")}
-      </div>
-    `;
+    return `<div class="board">${state.players.map(p=>`
+      <div class="board-item ${p.is_out?'out':''} ${p.id===askingId?'asking':''}">
+        <div class="nm">${escapeHtml(p.name)}</div>
+        <div class="hearts">${'❤'.repeat(p.hearts)}${'♡'.repeat(Math.max(0,3-p.hearts))}</div>
+        <div class="status">${p.is_out?('✈ '+ (p.placement?p.placement+'. Platz':'raus')):(p.id===askingId?'jetzt dran':'boarding')}</div>
+      </div>`).join("")}</div>`;
   }
 
-  function escapeHtml(s){
-    return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  }
-
-  function qListHtml(filter){
-    const term = (filter||"").toLowerCase().trim();
-    const filtered = term
-      ? state.questions.filter(q=> q.frage.toLowerCase().includes(term) || q.antwort.toLowerCase().includes(term))
-      : state.questions;
-    if(filtered.length===0){
-      return `<div style="color:var(--text-dim);font-size:13px;padding:6px 2px;">Keine Treffer.</div>`;
+  function render(){
+    if(!state.code){
+      return state.role==="host" ? renderHostLanding() : renderPlayerNeedsCode();
     }
-    const shown = filtered.slice(0,300);
-    let html = shown.map(q=>`
-      <div class="qitem">
-        <div class="qtext">
-          ${escapeHtml(q.frage)}
-          <span class="a">${escapeHtml(q.antwort)}${q.anmerkung?` · <em>${escapeHtml(q.anmerkung)}</em>`:""}</span>
-          ${q.used?'<span style="display:block;color:var(--text-dim);font-size:10px;margin-top:2px;">bereits verwendet</span>':""}
-        </div>
-        <button class="btn-ghost" data-delq="${q.id}">✕</button>
-      </div>
-    `).join("");
-    if(filtered.length>300){
-      html += `<div style="color:var(--text-dim);font-size:12px;padding:4px 2px;">… und ${filtered.length-300} weitere. Weiter oben tippen, um einzugrenzen.</div>`;
+    if(!state.session){
+      app.innerHTML = `${header()}<div class="card"><p class="subtitle">Lade Raum …</p></div>`;
+      return;
     }
-    return html;
+    if(state.role==="player" && !state.myPlayerId){
+      return renderPlayerJoinForm();
+    }
+    const phase = state.session.phase;
+    if(state.role==="host"){
+      if(phase==="lobby") return renderHostLobby();
+      if(phase==="round") return renderHostRound();
+      if(phase==="voting") return renderHostVoting();
+      if(phase==="stamp") return renderHostStamp();
+      if(phase==="finale-intro") return renderHostFinaleIntro();
+      if(phase==="finale-tiebreak-intro") return renderHostFinaleTiebreakIntro();
+      if(phase==="finale-question") return renderHostFinaleQuestion();
+      if(phase==="finale-review") return renderHostFinaleReview();
+      if(phase==="finale-result") return renderHostFinaleResult();
+      if(phase==="winner") return renderHostWinner();
+    }else{
+      if(phase==="lobby") return renderPlayerLobby();
+      if(phase==="round") return renderPlayerRound();
+      if(phase==="voting") return renderPlayerVoting();
+      if(phase==="stamp") return renderPlayerStamp();
+      if(phase==="finale-intro") return renderPlayerFinaleIntro();
+      if(phase==="finale-tiebreak-intro") return renderPlayerFinaleIntro();
+      if(phase==="finale-question") return renderPlayerFinaleQuestion();
+      if(phase==="finale-review") return renderPlayerFinaleWaiting();
+      if(phase==="finale-result") return renderPlayerFinaleResult();
+      if(phase==="winner") return renderPlayerWinner();
+    }
   }
 
-  function toQId(raw){
-    // Supabase-IDs sind numerisch (bigint), Fallback-IDs sind Strings (uid())
-    const n = Number(raw);
-    return (!isNaN(n) && supabaseClient) ? n : raw;
-  }
-
-  function bindQListDelete(){
-    document.querySelectorAll("[data-delq]").forEach(b=>{
-      b.onclick = ()=> deleteQuestion(toQId(b.dataset.delq));
-    });
-  }
-
-  function renderSetup(){
+  /* ---------- HOST: Landing (Fragen-DB + Raum eröffnen) ---------- */
+  function renderHostLanding(){
     const pool = state.questions.length;
     const usedCount = state.questions.filter(q=>q.used).length;
     app.innerHTML = `
       ${header()}
-      <p class="subtitle">Check-in: Spieler einchecken, dann geht's los.</p>
-
-      ${state.loadError ? `
-        <div class="card" style="border-color:var(--danger);">
-          <h2 style="color:var(--danger);">Hinweis</h2>
-          <p class="subtitle" style="margin:0;">${escapeHtml(state.loadError)}</p>
-        </div>
-      ` : ""}
-
+      <p class="subtitle">Raum eröffnen, dann können Spieler per Link/QR beitreten.</p>
+      ${state.loadError ? `<div class="card" style="border-color:var(--danger);"><h2 style="color:var(--danger);">Hinweis</h2><p class="subtitle" style="margin:0;">${escapeHtml(state.loadError)}</p></div>` : ""}
       <div class="card">
         <h2>Rundendauer</h2>
-        <div class="row">
-          <div>
-            <label>Minuten pro Runde</label>
-            <input type="number" id="roundMinutes" min="1" max="15" value="${state.roundMinutes}">
-          </div>
-        </div>
+        <div class="row"><div><label>Minuten pro Runde</label><input type="text" inputmode="numeric" id="roundMinutes" value="${state.roundMinutes}"></div></div>
       </div>
-
       <div class="card">
-        <h2>Spieler einchecken</h2>
-        <div class="row">
-          <div>
-            <label>Name</label>
-            <input type="text" id="playerName" placeholder="z. B. Anna" maxlength="20">
-          </div>
-          <button class="btn-amber" id="addPlayerBtn">+ Hinzufügen</button>
-        </div>
-        <div class="pass-grid" id="passGrid">
-          ${state.players.map(p=>`
-            <div class="pass">
-              <span class="flightno">${p.flightNo}</span>
-              <span>${escapeHtml(p.name)}</span>
-              <button class="btn-ghost" data-remove="${p.id}">✕</button>
-            </div>
-          `).join("") || `<span style="color:var(--text-dim);font-size:13px;">Noch niemand eingecheckt.</span>`}
-        </div>
-
-        <details open>
-          <summary>Fragen-Datenbank (${pool} Fragen, ${usedCount} bereits verwendet)</summary>
-          <div class="row" style="margin-top:12px;">
-            <div>
-              <label>Frage</label>
-              <input type="text" id="newQ" placeholder="Neue Frage">
-            </div>
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <div>
-              <label>Lösung</label>
-              <input type="text" id="newA" placeholder="Antwort">
-            </div>
-          </div>
-          <div class="row" style="margin-top:8px;">
-            <div>
-              <label>Anmerkung zur Antwort (optional)</label>
-              <input type="text" id="newNote" placeholder="z. B. zusätzlicher Kontext">
-            </div>
-            <button class="btn-outline" id="addQBtn">+ Frage speichern</button>
-          </div>
-          <div class="row" style="margin-top:14px;">
-            <div>
-              <label>Suche in der Datenbank</label>
-              <input type="text" id="qSearch" placeholder="Frage oder Antwort durchsuchen …">
-            </div>
-          </div>
-          <div class="qlist" id="qlist" style="max-height:280px;">
-            ${qListHtml("")}
-          </div>
-          <div class="qcount">${pool} Fragen insgesamt, davon ${usedCount} bereits verwendet. Neue Fragen bleiben dauerhaft erhalten und werden beim Speichern auf ähnliche bestehende Fragen geprüft.</div>
-          <div class="row" style="margin-top:12px;">
-            <button class="btn-outline" id="resetPoolBtn">🔄 Fragen-Pool zurücksetzen</button>
-          </div>
-        </details>
+        <h2>Fragen-Datenbank (${pool} Fragen, ${usedCount} verwendet)</h2>
+        <div class="row"><div><label>Frage</label><input type="text" id="newQ" placeholder="Neue Frage"></div></div>
+        <div class="row" style="margin-top:8px;"><div><label>Lösung</label><input type="text" id="newA" placeholder="Antwort"></div></div>
+        <div class="row" style="margin-top:8px;"><div><label>Anmerkung (optional)</label><input type="text" id="newNote" placeholder="Zusatzinfo"></div><button class="btn-outline" id="addQBtn">+ Speichern</button></div>
+        <div class="row" style="margin-top:12px;"><button class="btn-outline" id="resetPoolBtn">🔄 Fragen-Pool zurücksetzen</button></div>
       </div>
-
-      <button class="btn-amber btn-block btn-lg" id="startBtn" ${state.players.length<2?'disabled style="opacity:.45;cursor:not-allowed;"':''}>✈ Spiel starten</button>
-      ${state.players.length<2?'<p class="subtitle" style="text-align:center;margin-top:8px;">Mindestens 2 Spieler einchecken.</p>':''}
+      <button class="btn-amber btn-block btn-lg" id="openRoomBtn">✈ Raum eröffnen</button>
     `;
-
-    document.getElementById("addPlayerBtn").onclick = addPlayer;
-    document.getElementById("playerName").addEventListener("keydown", e=>{ if(e.key==="Enter") addPlayer(); });
     document.getElementById("roundMinutes").onchange = e=>{
       const v = parseInt(e.target.value,10);
-      state.roundMinutes = (v>=1 && v<=15) ? v : state.roundMinutes;
+      if(v>=1 && v<=15) state.roundMinutes = v;
     };
-    document.getElementById("addQBtn").onclick = addQuestion;
-    document.getElementById("startBtn").onclick = startGame;
-    document.getElementById("resetPoolBtn").onclick = confirmResetPool;
-    document.getElementById("qSearch").addEventListener("input", e=>{
-      document.getElementById("qlist").innerHTML = qListHtml(e.target.value);
-      bindQListDelete();
-    });
-    app.querySelectorAll("[data-remove]").forEach(b=>{
-      b.onclick = ()=>{
-        state.players = state.players.filter(p=>p.id!==b.dataset.remove);
-        render();
-      };
-    });
-    bindQListDelete();
-  }
-
-  function addPlayer(){
-    const input = document.getElementById("playerName");
-    const name = input.value.trim();
-    if(!name) return;
-    const flightNo = "FL"+pad(state.players.length+1);
-    state.players.push({id:uid(), name, flightNo, hearts:3, out:false});
-    input.value="";
-    render();
-    document.getElementById("playerName").focus();
-  }
-
-  function addQuestion(){
-    const q = document.getElementById("newQ").value.trim();
-    const a = document.getElementById("newA").value.trim();
-    const note = document.getElementById("newNote").value.trim();
-    if(!q || !a) return;
-    const matches = findSimilar(q);
-    if(matches.length>0){
-      showDuplicateModal(q,a,note,matches);
-    }else{
-      commitQuestion(q,a,note);
-    }
+    document.getElementById("addQBtn").onclick = ()=>{
+      const q = document.getElementById("newQ").value.trim();
+      const a = document.getElementById("newA").value.trim();
+      const note = document.getElementById("newNote").value.trim();
+      if(!q||!a) return;
+      const matches = findSimilar(q);
+      if(matches.length>0){ showDuplicateModal(q,a,note,matches); }
+      else{ commitQuestion(q,a,note); }
+    };
+    document.getElementById("resetPoolBtn").onclick = ()=>{
+      if(confirm("Alle Fragen wieder in den Pool werfen?")) resetQuestionPool();
+    };
+    document.getElementById("openRoomBtn").onclick = hostCreateSession;
   }
 
   function showDuplicateModal(q,a,note,matches){
@@ -755,576 +896,414 @@
     overlay.innerHTML = `
       <div class="modal" style="max-width:440px;text-align:left;">
         <div class="eyebrow" style="justify-content:center;">Möglicherweise schon vorhanden</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;font-size:17px;margin:8px 0 12px;text-align:center;">Ähnliche Frage${matches.length>1?'n':''} gefunden</h2>
         <div class="qlist" style="max-height:200px;">
-          ${matches.map(m=>`
-            <div class="qitem">
-              <div class="qtext">${escapeHtml(m.q.frage)}<span class="a">${escapeHtml(m.q.antwort)}</span></div>
-              <span style="font-family:'Space Mono',monospace;font-size:11px;color:var(--amber);white-space:nowrap;">${Math.round(m.score*100)}%</span>
-            </div>
-          `).join("")}
+          ${matches.map(m=>`<div class="qitem"><div class="qtext">${escapeHtml(m.q.frage)}<span class="a">${escapeHtml(m.q.antwort)}</span></div><span style="font-size:11px;color:var(--amber);">${Math.round(m.score*100)}%</span></div>`).join("")}
         </div>
-        <div class="mbtns">
-          <button class="btn-outline" id="dupCancel">Bearbeiten</button>
-          <button class="btn-danger" id="dupSaveAnyway">Trotzdem speichern</button>
-        </div>
-      </div>
-    `;
+        <div class="mbtns"><button class="btn-outline" id="dupCancel">Bearbeiten</button><button class="btn-danger" id="dupSave">Trotzdem speichern</button></div>
+      </div>`;
     document.body.appendChild(overlay);
-    document.getElementById("dupCancel").onclick = ()=> overlay.remove();
-    document.getElementById("dupSaveAnyway").onclick = ()=>{
-      overlay.remove();
-      commitQuestion(q,a,note);
-    };
+    document.getElementById("dupCancel").onclick = ()=>overlay.remove();
+    document.getElementById("dupSave").onclick = ()=>{ overlay.remove(); commitQuestion(q,a,note); };
   }
 
-  function confirmResetPool(){
-    const overlay = document.createElement("div");
-    overlay.className = "overlay";
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="eyebrow" style="justify-content:center;">Bestätigen</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;margin:8px 0;">Fragen-Pool zurücksetzen?</h2>
-        <p class="subtitle" style="margin:0;">Alle Fragen gelten danach wieder als unverwendet und können erneut gezogen werden.</p>
-        <div class="mbtns">
-          <button class="btn-outline" id="cancelReset">Abbrechen</button>
-          <button class="btn-danger" id="confirmResetBtn">Ja, zurücksetzen</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    document.getElementById("cancelReset").onclick = ()=> overlay.remove();
-    document.getElementById("confirmResetBtn").onclick = ()=>{
-      overlay.remove();
-      resetQuestionPool();
-    };
-  }
-
-  function startGame(){
-    if(state.players.length<2) return;
-    const unused = state.questions.filter(q=>!q.used);
-    if(unused.length===0){
-      alert("Alle Fragen wurden bereits verwendet. Bitte zuerst den Fragen-Pool zurücksetzen.");
-      return;
-    }
-    state.roundLog = [];
-    state.turnIndex = 0;
-    if(state.players.length===2){
-      startFinale();
-    }else{
-      state.deck = shuffle(unused);
-      beginRound();
-    }
-  }
-
-  function startFinale(){
-    const active = activePlayers();
-    const unused = state.questions.filter(q=>!q.used);
-    if(unused.length===0){
-      alert("Keine unverwendeten Fragen mehr für das Finale übrig. Bitte zuerst den Fragen-Pool zurücksetzen.");
-      state.phase = "setup";
-      render();
-      return;
-    }
-    const count = Math.min(10, unused.length);
-    const chosen = shuffle(unused).slice(0, count);
-    const players = active.slice(0,2);
-    const scores = {}, details = {};
-    players.forEach(p=>{ scores[p.id]=0; details[p.id]=[]; });
-    state.finale = { players, questions: chosen, turn: 0, qIndex: 0, scores, details, isTieBreak:false, winnerId:null };
-    state.phase = "finale-intro";
-    render();
-  }
-
-  function startTieBreak(){
-    const unused = state.questions.filter(q=>!q.used);
-    if(unused.length===0){
-      // Keine Fragen mehr übrig, um das Unentschieden aufzulösen — bleibt Unentschieden.
-      state.phase = "finale-result";
-      render();
-      return;
-    }
-    const count = Math.min(5, unused.length);
-    state.finale.questions = shuffle(unused).slice(0, count);
-    state.finale.turn = 0;
-    state.finale.qIndex = 0;
-    state.finale.isTieBreak = true;
-    state.finale.players.forEach(p=>{ state.finale.details[p.id] = []; });
-    state.phase = "finale-tiebreak-intro";
-    render();
-  }
-
-  function beginRound(){
-    state.phase = "round";
-    assignQuestion();
-    state.roundLog = [];
-    state.timeLeft = state.roundMinutes*60;
-    state.running = true;
-    clearInterval(state.timerId);
-    state.timerId = setInterval(tick, 1000);
-    render();
-  }
-
-  function tick(){
-    if(!state.running) return;
-    state.timeLeft--;
-    const el = document.getElementById("timerDisplay");
-    if(el){
-      el.textContent = fmt(Math.max(0,state.timeLeft));
-      el.classList.remove("tick"); void el.offsetWidth; el.classList.add("tick");
-    }
-    if(state.timeLeft<=0){
-      clearInterval(state.timerId);
-      state.running = false;
-      endRound();
-    }
-  }
-
-  function renderRound(){
-    const askingName = state.currentPlayer ? state.currentPlayer.name : "–";
+  /* ---------- HOST: Lobby ---------- */
+  function renderHostLobby(){
+    const url = joinUrl(state.code);
     app.innerHTML = `
       ${header()}
-      ${boardStrip(state.currentPlayer ? state.currentPlayer.id : null)}
-      <div class="timer-wrap">
-        <div class="flip" id="timerDisplay">${fmt(state.timeLeft)}</div>
-        <div class="timer-controls">
-          <button class="btn-outline" id="pauseBtn">${state.running?'⏸ Pause':'▶ Weiter'}</button>
-          <button class="btn-danger" id="endRoundBtn">Runde jetzt beenden</button>
-        </div>
+      <div class="card" style="text-align:center;">
+        <div class="eyebrow" style="justify-content:center;">Raum-Code</div>
+        <h2 style="font-family:'Archivo Black',sans-serif;font-size:40px;letter-spacing:.1em;margin:6px 0;">${state.code}</h2>
+        <div id="qrHolder" class="qr-box"></div>
+        <div class="join-link">${escapeHtml(url)}</div>
       </div>
+      <div class="card">
+        <h2>Beigetretene Spieler (${state.players.length})</h2>
+        ${state.players.map(p=>`<div class="lobby-player"><span>${escapeHtml(p.name)}</span><span>❤❤❤</span></div>`).join("") || `<p class="subtitle" style="margin:0;">Noch niemand beigetreten.</p>`}
+      </div>
+      <button class="btn-amber btn-block btn-lg" id="startBtn" ${state.players.length<2?'disabled style="opacity:.45;"':''}>✈ Spiel starten</button>
+      ${state.players.length<2?'<p class="subtitle" style="text-align:center;margin-top:8px;">Mindestens 2 Spieler nötig.</p>':''}
+    `;
+    if(window.QRCode){
+      document.getElementById("qrHolder").innerHTML = "";
+      new QRCode(document.getElementById("qrHolder"), {text:url, width:180, height:180});
+    }
+    document.getElementById("startBtn").onclick = hostStartGame;
+  }
 
+  /* ---------- HOST: Runde ---------- */
+  function renderHostRound(){
+    const s = state.session;
+    const targetName = (state.players.find(p=>p.id===s.current_target_player_id)||{}).name || "–";
+    const timeLeft = secsUntil(s.round_ends_at);
+    app.innerHTML = `
+      ${header()}
+      ${boardStrip(s.current_target_player_id)}
+      <div class="timer-wrap">
+        <div class="flip" id="timerDisplay">${fmt(timeLeft)}</div>
+        <div class="timer-controls"><button class="btn-danger" id="endRoundBtn">Runde jetzt beenden</button></div>
+      </div>
       <div class="card qcard">
         <div class="eyebrow" style="justify-content:center;">Frage an</div>
-        <div class="target-name">${escapeHtml(askingName)}</div>
-        <div class="qnum">Frage ${state.roundLog.length+1}</div>
-        <div class="qtext">${escapeHtml(state.currentQ.frage)}</div>
-        <div class="atext">Lösung: ${escapeHtml(state.currentQ.antwort)}</div>
-        ${state.currentQ.anmerkung ? `<div style="color:var(--text-dim);font-size:12px;margin-top:8px;">${escapeHtml(state.currentQ.anmerkung)}</div>` : ""}
+        <div class="target-name">${escapeHtml(targetName)}</div>
+        <div class="qtext">${escapeHtml(s.current_question.frage)}</div>
+        <div class="atext">Lösung: ${escapeHtml(s.current_question.antwort)}</div>
+        ${s.current_question.anmerkung?`<div style="color:var(--text-dim);font-size:12px;margin-top:8px;">${escapeHtml(s.current_question.anmerkung)}</div>`:""}
         <div class="qbtns">
-          <button class="btn-teal" id="rightBtn">✓ Richtig beantwortet</button>
-          <button class="btn-danger" id="wrongBtn">✗ Falsch beantwortet</button>
+          <button class="btn-teal" id="rightBtn">✓ Richtig</button>
+          <button class="btn-danger" id="wrongBtn">✗ Falsch</button>
           <button class="btn-outline" id="skipBtn">Überspringen</button>
         </div>
       </div>
-      <div class="stats">Bisher in dieser Runde: ${state.roundLog.filter(x=>x.mark==='right').length} richtig · ${state.roundLog.filter(x=>x.mark==='wrong').length} falsch · ${state.roundLog.filter(x=>x.mark==='skip').length} übersprungen</div>
     `;
-    document.getElementById("pauseBtn").onclick = ()=>{
-      state.running = !state.running;
-      render();
-    };
-    document.getElementById("endRoundBtn").onclick = ()=>{
-      clearInterval(state.timerId);
-      state.running=false;
-      endRound();
-    };
-    document.getElementById("rightBtn").onclick = ()=>nextQuestion("right");
-    document.getElementById("wrongBtn").onclick = ()=>nextQuestion("wrong");
-    document.getElementById("skipBtn").onclick = ()=>nextQuestion("skip");
+    document.getElementById("rightBtn").onclick = ()=>hostNextQuestion("right");
+    document.getElementById("wrongBtn").onclick = ()=>hostNextQuestion("wrong");
+    document.getElementById("skipBtn").onclick = ()=>hostNextQuestion("skip");
+    document.getElementById("endRoundBtn").onclick = hostEndRound;
+    startLocalTicker();
   }
 
-  function nextQuestion(mark){
-    if(state.currentQ && state.currentQ.id!=null){
-      state.roundLog.push({
-        frage:state.currentQ.frage,
-        antwort:state.currentQ.antwort,
-        anmerkung:state.currentQ.anmerkung,
-        mark,
-        playerId: state.currentPlayer ? state.currentPlayer.id : null,
-        playerName: state.currentPlayer ? state.currentPlayer.name : "–"
-      });
-      markUsed(state.currentQ.id);
-      state.turnIndex++;
-    }
-    assignQuestion();
-    render();
-  }
-
-  function endRound(){
-    state.phase = "voting";
-    render();
-  }
-
-  function groupByPlayer(list){
-    const map = {};
-    const order = [];
-    list.forEach(x=>{
-      const key = x.playerName || "–";
-      if(!map[key]){ map[key]=[]; order.push(key); }
-      map[key].push(x);
-    });
-    return order.map(name=>({name, items:map[name]}));
-  }
-
-  function renderVoting(){
+  /* ---------- HOST: Voting ---------- */
+  function renderHostVoting(){
     const active = activePlayers();
-    const wrong = state.roundLog.filter(x=>x.mark==='wrong');
-    const grouped = groupByPlayer(wrong);
+    const tally = {};
+    state.votes.forEach(v=>{ tally[v.target_id] = (tally[v.target_id]||0)+1; });
+    const wrong = (state._roundLog||[]).filter(x=>x.mark==='wrong');
     app.innerHTML = `
       ${header()}
       ${boardStrip()}
       <div class="card">
-        <h2>Runde beendet — wer fliegt?</h2>
-        <p class="subtitle" style="margin-bottom:0;">Stimmt im Raum ab, wer die dümmste Antwort gegeben hat, und tippe den Spieler an.</p>
+        <h2>Live-Stimmen</h2>
+        ${active.map(p=>`<div class="vote-tally"><span>${escapeHtml(p.name)}</span><span>${tally[p.id]||0} Stimme(n)</span></div>`).join("")}
+      </div>
+      <div class="card">
+        <h2>Wer fliegt?</h2>
         <div class="vote-grid">
-          ${active.map(p=>`
-            <div class="vote-card" data-vote="${p.id}">
-              <div class="nm">${escapeHtml(p.name)}</div>
-              <div class="hearts">${'❤'.repeat(p.hearts)}${'♡'.repeat(3-p.hearts)}</div>
-            </div>
-          `).join("")}
+          ${active.map(p=>`<div class="vote-card" data-elim="${p.id}"><div class="nm">${escapeHtml(p.name)}</div><div class="hearts">${'❤'.repeat(p.hearts)}</div></div>`).join("")}
         </div>
       </div>
-
       <div class="card">
-        <h2>✗ Falsch beantwortet in dieser Runde (${wrong.length})</h2>
-        ${grouped.length===0
-          ? `<p class="subtitle" style="margin:0;">Alles richtig beantwortet in dieser Runde. 🎉</p>`
-          : grouped.map(g=>`
-              <div style="margin-bottom:16px;">
-                <div style="font-family:'Archivo Black',sans-serif;font-size:13px;color:var(--amber);letter-spacing:.03em;text-transform:uppercase;margin-bottom:6px;">${escapeHtml(g.name)} (${g.items.length})</div>
-                <div class="qlist" style="max-height:none;">
-                  ${g.items.map(x=>`
-                    <div class="qitem">
-                      <div class="qtext">${escapeHtml(x.frage)}<span class="a">Lösung: ${escapeHtml(x.antwort)}${x.anmerkung?` · <em>${escapeHtml(x.anmerkung)}</em>`:""}</span></div>
-                    </div>
-                  `).join("")}
-                </div>
-              </div>
-            `).join("")
-        }
+        <h2>✗ Falsch beantwortet (${wrong.length})</h2>
+        ${wrong.map(x=>`<div class="qitem"><div class="qtext">${escapeHtml(x.playerName)}: ${escapeHtml(x.frage)}<span class="a">Lösung: ${escapeHtml(x.antwort)}</span></div></div>`).join("") || `<p class="subtitle" style="margin:0;">Alles richtig.</p>`}
       </div>
     `;
-    app.querySelectorAll("[data-vote]").forEach(el=>{
-      el.onclick = ()=> confirmVote(el.dataset.vote);
+    app.querySelectorAll("[data-elim]").forEach(el=>{
+      el.onclick = ()=>{
+        const p = state.players.find(x=>x.id===el.dataset.elim);
+        if(confirm(escapeHtml(p.name)+" verliert ein Herz?")) hostConfirmElimination(p.id);
+      };
     });
   }
 
-  function confirmVote(playerId){
-    const p = state.players.find(x=>x.id===playerId);
-    if(!p) return;
-    const overlay = document.createElement("div");
-    overlay.className = "overlay";
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="eyebrow" style="justify-content:center;">Bestätigen</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;margin:8px 0;">${escapeHtml(p.name)} verliert ein Herz?</h2>
-        <p class="subtitle" style="margin:0;">Das kann nicht rückgängig gemacht werden.</p>
-        <div class="mbtns">
-          <button class="btn-outline" id="cancelVote">Abbrechen</button>
-          <button class="btn-danger" id="confirmVoteBtn">Ja, Herz weg</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    document.getElementById("cancelVote").onclick = ()=> overlay.remove();
-    document.getElementById("confirmVoteBtn").onclick = ()=>{
-      overlay.remove();
-      applyElimination(p.id);
-    };
+  function renderHostStamp(){
+    const p = state.players.find(x=>x.id===state.session.stamp_player_id);
+    app.innerHTML = `${header()}<div class="card stamp"><div class="plane">✈️</div><div class="word">ABGEFLOGEN</div><div class="sub">${p?escapeHtml(p.name):''} ist raus.</div></div>`;
   }
 
-  function applyElimination(playerId){
-    const p = state.players.find(x=>x.id===playerId);
-    p.hearts--;
-    if(p.hearts<=0){
-      p.hearts = 0;
-      p.out = true;
-      state.stampName = p.name;
-      state.phase = "stamp";
-      render();
-      setTimeout(()=>{
-        const remaining = activePlayers();
-        if(remaining.length<=1){
-          state.phase = "winner";
-        }else if(remaining.length===2){
-          startFinale();
-          return;
-        }else{
-          beginRound();
-          return;
-        }
-        render();
-      }, 1600);
-    }else{
-      beginRound();
-    }
+  function renderHostWinner(){
+    const winner = state.players.find(p=>p.placement===1);
+    app.innerHTML = `${header()}<div class="card winner" id="winnerCard"><div class="trophy">🏆</div><h2>${winner?escapeHtml(winner.name):''} gewinnt!</h2><button class="btn-amber btn-lg" id="newGameBtn" style="margin-top:18px;">Neues Spiel</button></div>`;
+    document.getElementById("newGameBtn").onclick = ()=>{ window.location.href = window.location.pathname; };
   }
 
-  function renderStamp(){
-    app.innerHTML = `
-      ${header()}
-      <div class="card stamp">
-        <div class="plane">✈️</div>
-        <div class="word">ABGEFLOGEN</div>
-        <div class="sub">${escapeHtml(state.stampName)} ist raus.</div>
-      </div>
-    `;
-  }
-
-  function addConfetti(card){
-    for(let i=0;i<24;i++){
-      const s = document.createElement("span");
-      s.className = "confetti-emoji";
-      s.textContent = "✈️";
-      s.style.left = Math.random()*100+"%";
-      s.style.animationDuration = (1.4+Math.random()*1.4)+"s";
-      s.style.animationDelay = (Math.random()*0.6)+"s";
-      s.style.fontSize = (14+Math.random()*14)+"px";
-      card.appendChild(s);
-    }
-  }
-
-  function resetToSetup(){
-    state.phase="setup";
-    state.players=[];
-    state.deck=[];
-    state.roundLog=[];
-    state.turnIndex=0;
-    state.currentPlayer=null;
-    state.finale=null;
-    render();
-  }
-
-  function renderWinner(){
-    const winner = activePlayers()[0];
-    app.innerHTML = `
-      ${header()}
-      <div class="card winner" id="winnerCard">
-        <div class="trophy">🏆</div>
-        <h2>${winner ? escapeHtml(winner.name) : ''} gewinnt!</h2>
-        <p>Bleibt als Einzige·r am Boden — alle anderen sind abgeflogen.</p>
-        <button class="btn-amber btn-lg" id="newGameBtn" style="margin-top:18px;">Neues Spiel</button>
-      </div>
-    `;
-    addConfetti(document.getElementById("winnerCard"));
-    document.getElementById("newGameBtn").onclick = resetToSetup;
-  }
-
-  /* ---------------- Finale (letzte 2 Spieler) ----------------
-     Ab hier zählen keine Herzen mehr: beide bekommen dieselben
-     10 (bzw. weniger, falls der Pool kleiner ist) Fragen nacheinander
-     vorgelegt — erst Spieler A alle, dann Spieler B alle. Wer mehr
-     richtig hat, gewinnt. Zusätzlich wird pro Frage festgehalten,
-     was geantwortet wurde.
-  ------------------------------------------------------------- */
-  function renderFinaleIntro(){
-    const [a,b] = state.finale.players;
+  function renderHostFinaleIntro(){
+    const s = state.session;
+    const names = s.finale_player_ids.map(id=>{
+      const p = state.players.find(x=>x.id===id);
+      return p ? p.name : "?";
+    });
     app.innerHTML = `
       ${header()}
       <div class="card" style="text-align:center;padding:40px 20px;">
         <div class="eyebrow" style="justify-content:center;">Nur noch zwei an Bord</div>
         <h2 style="font-family:'Archivo Black',sans-serif;font-size:clamp(24px,6vw,34px);margin:10px 0;">🏁 Finale</h2>
-        <p class="subtitle">${escapeHtml(a.name)} gegen ${escapeHtml(b.name)} — beide bekommen dieselben ${state.finale.questions.length} Fragen, nacheinander. Wer mehr richtig hat, gewinnt. Herzen zählen jetzt nicht mehr.</p>
+        <p class="subtitle">${escapeHtml(names[0])} gegen ${escapeHtml(names[1])} — beide bekommen dieselben ${s.finale_questions.length} Fragen gleichzeitig, blind auf ihrem Gerät. Herzen zählen jetzt nicht mehr.</p>
         <button class="btn-amber btn-lg" id="startFinaleBtn" style="margin-top:14px;">Finale starten</button>
       </div>
     `;
-    document.getElementById("startFinaleBtn").onclick = ()=>{
-      state.phase = "finale-question";
-      render();
-    };
+    document.getElementById("startFinaleBtn").onclick = hostBeginFinaleQuestionPhase;
   }
 
-  function renderFinaleTiebreakIntro(){
-    const f = state.finale;
+  function renderHostFinaleTiebreakIntro(){
+    const s = state.session;
+    const extra = s.finale_questions.length - s.finale_question_index;
     app.innerHTML = `
       ${header()}
       <div class="card" style="text-align:center;padding:40px 20px;">
         <div class="eyebrow" style="justify-content:center;">Unentschieden</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;font-size:clamp(22px,5vw,30px);margin:10px 0;">🔁 ${f.questions.length} weitere Fragen</h2>
-        <p class="subtitle">Gleichstand — beide bekommen noch ${f.questions.length} zusätzliche Fragen. Wer davon mehr richtig hat, gewinnt.</p>
+        <h2 style="font-family:'Archivo Black',sans-serif;font-size:clamp(22px,5vw,30px);margin:10px 0;">🔁 ${extra} weitere Fragen</h2>
+        <p class="subtitle">Gleichstand — beide bekommen noch ${extra} zusätzliche Fragen, gleichzeitig und blind.</p>
         <button class="btn-amber btn-lg" id="startTieBtn" style="margin-top:14px;">Weiter</button>
       </div>
     `;
-    document.getElementById("startTieBtn").onclick = ()=>{
-      state.phase = "finale-question";
-      render();
-    };
+    document.getElementById("startTieBtn").onclick = hostBeginFinaleQuestionPhase;
   }
 
-  function renderFinaleQuestion(){
-    const f = state.finale;
-    const player = f.players[f.turn];
-    const q = f.questions[f.qIndex];
-    const answeredSoFar = f.details[player.id];
-    const scoreSoFar = answeredSoFar.filter(x=>x.mark==='right').length;
-    const stageLabel = f.isTieBreak ? "Tie-Break" : ("Durchgang "+(f.turn+1)+"/2");
+  function renderHostFinaleQuestion(){
+    const s = state.session;
+    const q = s.finale_questions[s.finale_question_index];
+    const names = s.finale_player_ids.map(id=>state.players.find(p=>p.id===id));
+    const answers = {};
+    state.finaleAnswers.forEach(a=>{ answers[a.player_id] = a; });
+    const bothMarked = names.every(p=> answers[p.id] && answers[p.id].mark);
     app.innerHTML = `
       ${header()}
-      <div class="eyebrow" style="justify-content:center;">🏁 Finale · ${stageLabel}</div>
+      <div class="eyebrow" style="justify-content:center;">🏁 Finale · Frage ${s.finale_question_index+1} von ${s.finale_questions.length}</div>
       <div class="card qcard">
-        <div class="eyebrow" style="justify-content:center;">Frage an</div>
-        <div class="target-name">${escapeHtml(player.name)}</div>
-        <div class="qnum">Frage ${f.qIndex+1} von ${f.questions.length}</div>
-
         <div class="qtext">${escapeHtml(q.frage)}</div>
         <div class="atext">Lösung: ${escapeHtml(q.antwort)}</div>
-        ${q.anmerkung ? `<div style="color:var(--text-dim);font-size:12px;margin-top:8px;">${escapeHtml(q.anmerkung)}</div>` : ""}
-        <div class="row" style="margin-top:18px;text-align:left;">
-          <div>
-            <label>Was wurde geantwortet? (optional)</label>
-            <input type="text" id="finaleGiven" placeholder="Antwort des Spielers">
-          </div>
-        </div>
-        <div class="qbtns">
-          <button class="btn-teal" id="finRightBtn">✓ Richtig</button>
-          <button class="btn-danger" id="finWrongBtn">✗ Falsch</button>
-        </div>
+        ${q.anmerkung?`<div style="color:var(--text-dim);font-size:12px;margin-top:8px;">${escapeHtml(q.anmerkung)}</div>`:""}
       </div>
-      <div class="stats">${escapeHtml(player.name)} bisher: ${scoreSoFar} richtig von ${answeredSoFar.length} beantwortet</div>
+      ${names.map(p=>{
+        const a = answers[p.id];
+        return `
+        <div class="card">
+          <div style="font-family:'Archivo Black',sans-serif;font-size:13px;color:var(--amber);text-transform:uppercase;margin-bottom:8px;">${escapeHtml(p.name)}</div>
+          ${a ? `
+            <div style="margin-bottom:10px;">Antwort: <strong>${a.given_answer?escapeHtml(a.given_answer):'<em style="color:var(--text-dim);">– keine Angabe –</em>'}</strong></div>
+            <div class="qbtns" style="margin-top:0;">
+              <button class="btn-teal" data-mark="${p.id}|right" style="${a.mark==='right'?'outline:2px solid var(--teal);':''}">✓ Richtig</button>
+              <button class="btn-danger" data-mark="${p.id}|wrong" style="${a.mark==='wrong'?'outline:2px solid var(--danger);':''}">✗ Falsch</button>
+            </div>
+          ` : `<p class="subtitle" style="margin:0;">Wartet noch auf Antwort …</p>`}
+        </div>`;
+      }).join("")}
+      <button class="btn-amber btn-block btn-lg" id="finAdvanceBtn" ${bothMarked?'':'disabled style="opacity:.45;"'}>Weiter</button>
     `;
-    document.getElementById("finRightBtn").onclick = ()=>nextFinaleQuestion("right");
-    document.getElementById("finWrongBtn").onclick = ()=>nextFinaleQuestion("wrong");
+    app.querySelectorAll("[data-mark]").forEach(el=>{
+      el.onclick = ()=>{
+        const [pid, mark] = el.dataset.mark.split("|");
+        hostMarkFinaleAnswer(pid, mark);
+      };
+    });
+    if(bothMarked) document.getElementById("finAdvanceBtn").onclick = hostAdvanceFinale;
   }
 
-  function nextFinaleQuestion(mark){
-    const f = state.finale;
-    const player = f.players[f.turn];
-    const q = f.questions[f.qIndex];
-    const given = (document.getElementById("finaleGiven").value || "").trim();
-    f.details[player.id].push({frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung, given, mark});
-    if(f.turn===0){
-      markUsed(q.id);
-    }
-    f.qIndex++;
-    if(f.qIndex >= f.questions.length){
-      if(f.turn===0){
-        f.turn = 1;
-        f.qIndex = 0;
-        state.phase = "finale-handoff";
-      }else{
-        state.phase = "finale-review";
-      }
-    }
-    render();
-  }
-
-  function renderFinaleHandoff(){
-    const f = state.finale;
-    const done = f.players[0];
-    const next = f.players[1];
-    const score = f.details[done.id].filter(x=>x.mark==='right').length;
-    app.innerHTML = `
-      ${header()}
-      <div class="card" style="text-align:center;padding:36px 20px;">
-        <div class="eyebrow" style="justify-content:center;">Zwischenstand</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;font-size:22px;margin:10px 0;">${escapeHtml(done.name)}: ${score} von ${f.questions.length} richtig</h2>
-        <p class="subtitle">Jetzt ist ${escapeHtml(next.name)} an der Reihe — dieselben ${f.questions.length} Fragen.</p>
-        <button class="btn-amber btn-lg" id="continueFinaleBtn" style="margin-top:10px;">Weiter</button>
-      </div>
-    `;
-    document.getElementById("continueFinaleBtn").onclick = ()=>{
-      state.phase = "finale-question";
-      render();
-    };
-  }
-
-  function finaleQuestionRecap(f){
-    const [a,b] = f.players;
-    return f.questions.map((q,i)=>{
-      const da = f.details[a.id][i];
-      const db = f.details[b.id][i];
-      const line = (player, d) => `
-        <div style="font-size:12px;margin-top:4px;color:${d && d.mark==='right' ? 'var(--teal)' : 'var(--danger)'};">
-          <strong style="color:var(--text);">${escapeHtml(player.name)}:</strong>
-          ${d ? (d.mark==='right'?'✓':'✗') : '–'}
-          ${d && d.given ? escapeHtml(d.given) : '<em style="color:var(--text-dim);">– keine Angabe –</em>'}
-        </div>
-      `;
-      return `
-        <div class="qitem" style="flex-direction:column;align-items:stretch;">
-          <div class="qtext" style="margin:0;">
-            ${i+1}. ${escapeHtml(q.frage)}
-            <span class="a">Lösung: ${escapeHtml(q.antwort)}${q.anmerkung?` · <em>${escapeHtml(q.anmerkung)}</em>`:""}</span>
-          </div>
-          ${line(a, da)}
-          ${line(b, db)}
-        </div>
-      `;
+  function renderHostFinaleReview(){
+    const s = state.session;
+    const names = s.finale_player_ids.map(id=>state.players.find(p=>p.id===id));
+    const byIndex = {};
+    (state.allFinaleAnswers||[]).forEach(a=>{
+      byIndex[a.question_index] = byIndex[a.question_index] || {};
+      byIndex[a.question_index][a.player_id] = a;
+    });
+    const scores = {};
+    names.forEach(p=>{ scores[p.id] = (state.allFinaleAnswers||[]).filter(a=>a.player_id===p.id && a.mark==='right').length; });
+    const rows = s.finale_questions.map((q,i)=>{
+      const lines = names.map(p=>{
+        const a = (byIndex[i]||{})[p.id];
+        const mark = a?a.mark:null;
+        return `<div style="font-size:12px;margin-top:4px;color:${mark==='right'?'var(--teal)':'var(--danger)'};">
+          <strong style="color:var(--text);">${escapeHtml(p.name)}:</strong> ${mark==='right'?'✓':(mark==='wrong'?'✗':'–')}
+          ${a && a.given_answer ? escapeHtml(a.given_answer) : '<em style="color:var(--text-dim);">– keine Angabe –</em>'}
+        </div>`;
+      }).join("");
+      return `<div class="qitem" style="flex-direction:column;align-items:stretch;">
+        <div class="qtext" style="margin:0;">${i+1}. ${escapeHtml(q.frage)}<span class="a">Lösung: ${escapeHtml(q.antwort)}${q.anmerkung?` · <em>${escapeHtml(q.anmerkung)}</em>`:""}</span></div>
+        ${lines}
+      </div>`;
     }).join("");
-  }
-
-  function renderFinaleReview(){
-    const f = state.finale;
-    const [a,b] = f.players;
-    const scoreA = f.details[a.id].filter(x=>x.mark==='right').length;
-    const scoreB = f.details[b.id].filter(x=>x.mark==='right').length;
     app.innerHTML = `
       ${header()}
       <div class="card">
-        <h2>${f.isTieBreak ? 'Tie-Break' : 'Finale'} — Übersicht</h2>
-        <p class="subtitle" style="margin:0 0 6px;">${escapeHtml(a.name)}: ${scoreA} von ${f.questions.length} richtig · ${escapeHtml(b.name)}: ${scoreB} von ${f.questions.length} richtig</p>
+        <h2>Finale — Übersicht</h2>
+        <p class="subtitle" style="margin:0 0 6px;">${names.map(p=>escapeHtml(p.name)+": "+scores[p.id]+" richtig").join(" · ")}</p>
         <p class="subtitle" style="margin:0;">Wer hat gewonnen? Spieler antippen — oder bei Gleichstand auf „Weiter" für 5 weitere Fragen.</p>
       </div>
-      <div class="card">
-        <div class="qlist" style="max-height:none;">
-          ${finaleQuestionRecap(f)}
-        </div>
-      </div>
+      <div class="card"><div class="qlist" style="max-height:none;">${rows}</div></div>
       <div class="vote-grid">
-        <div class="vote-card" data-finwin="${a.id}">
-          <div class="nm">🏆 ${escapeHtml(a.name)} gewinnt</div>
-        </div>
-        <div class="vote-card" data-finwin="${b.id}">
-          <div class="nm">🏆 ${escapeHtml(b.name)} gewinnt</div>
-        </div>
+        ${names.map(p=>`<div class="vote-card" data-finwin="${p.id}"><div class="nm">🏆 ${escapeHtml(p.name)} gewinnt</div></div>`).join("")}
       </div>
       <button class="btn-outline btn-block" id="finTieBtn" style="margin-top:12px;">Unentschieden — weiter mit 5 Fragen</button>
     `;
     app.querySelectorAll("[data-finwin]").forEach(el=>{
-      el.onclick = ()=> confirmFinaleWinner(el.dataset.finwin);
+      el.onclick = ()=>{
+        const p = state.players.find(x=>x.id===el.dataset.finwin);
+        if(confirm(escapeHtml(p.name)+" gewinnt das Finale?")) hostConfirmFinaleWinner(p.id);
+      };
     });
-    document.getElementById("finTieBtn").onclick = startTieBreak;
+    document.getElementById("finTieBtn").onclick = hostStartFinaleTieBreak;
   }
 
-  function confirmFinaleWinner(playerId){
-    const f = state.finale;
-    const p = f.players.find(x=>x.id===playerId);
-    if(!p) return;
-    const overlay = document.createElement("div");
-    overlay.className = "overlay";
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="eyebrow" style="justify-content:center;">Bestätigen</div>
-        <h2 style="font-family:'Archivo Black',sans-serif;margin:8px 0;">${escapeHtml(p.name)} gewinnt das Finale?</h2>
-        <p class="subtitle" style="margin:0;">Beendet das Spiel.</p>
-        <div class="mbtns">
-          <button class="btn-outline" id="cancelFinWin">Abbrechen</button>
-          <button class="btn-amber" id="confirmFinWinBtn">Ja, gewonnen</button>
+  function renderHostFinaleResult(){
+    const winner = state.players.find(p=>p.id===state.session.finale_winner_id);
+    app.innerHTML = `${header()}<div class="card winner" id="winnerCard"><div class="trophy">🏆</div><h2>${winner?escapeHtml(winner.name):''} gewinnt das Finale!</h2><button class="btn-amber btn-lg" id="newGameBtn" style="margin-top:18px;">Neues Spiel</button></div>`;
+    document.getElementById("newGameBtn").onclick = ()=>{ window.location.href = window.location.pathname; };
+  }
+
+  /* ---------- PLAYER ---------- */
+  function renderPlayerNeedsCode(){
+    app.innerHTML = `${header()}<div class="card"><p class="subtitle" style="margin:0;">Dieser Link ist kein gültiger Beitritts-Link. Bitte den QR-Code oder Link vom Quizmaster verwenden.</p></div>`;
+  }
+
+  function renderPlayerJoinForm(){
+    app.innerHTML = `
+      ${header()}
+      <div class="card">
+        <h2>Beitreten</h2>
+        <div class="row"><div><label>Dein Name</label><input type="text" id="joinName" placeholder="z. B. Anna" maxlength="20"></div></div>
+        <button class="btn-amber btn-block btn-lg" id="joinBtn" style="margin-top:14px;">Beitreten</button>
+      </div>
+    `;
+    document.getElementById("joinBtn").onclick = ()=>{
+      const name = document.getElementById("joinName").value;
+      playerJoin(name);
+    };
+    document.getElementById("joinName").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("joinBtn").click(); });
+  }
+
+  function renderPlayerLobby(){
+    app.innerHTML = `${header()}<div class="big-status"><div class="icon">🛫</div><h2>Willkommen, ${escapeHtml(state.myName)}!</h2><p class="subtitle">Warte auf Spielstart durch den Quizmaster …</p></div>${boardStrip()}`;
+  }
+
+  function renderPlayerRound(){
+    const s = state.session;
+    const isMe = s.current_target_player_id === state.myPlayerId;
+    const me = state.players.find(p=>p.id===state.myPlayerId);
+    const timeLeft = secsUntil(s.round_ends_at);
+    app.innerHTML = `
+      ${header()}
+      <div class="timer-wrap"><div class="flip" id="timerDisplay">${fmt(timeLeft)}</div></div>
+      <div class="card" style="text-align:center;">
+        <div style="color:var(--text-dim);font-size:12px;">${activePlayers().length} Spieler noch im Rennen</div>
+        <div class="hearts" style="font-size:20px;margin-top:6px;">${'❤'.repeat(me?me.hearts:0)}${'♡'.repeat(Math.max(0,3-(me?me.hearts:0)))}</div>
+      </div>
+      ${isMe ? `
+        <div class="card qcard">
+          <div class="eyebrow" style="justify-content:center;">Deine Frage</div>
+          <div class="qtext">${escapeHtml(s.current_question.frage)}</div>
+        </div>
+      ` : `
+        <div class="answer-waiting">Frage geht gerade an jemand anderen …</div>
+      `}
+    `;
+    startLocalTicker();
+  }
+
+  function renderPlayerVoting(){
+    const s = state.session;
+    const wait = secsUntil(s.voting_opens_at);
+    const active = activePlayers();
+    const already = state.votes && state.votes.some ? false : false;
+    if(wait > 0){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🤔</div><h2>Bedenkzeit</h2><div class="flip">${fmt(wait)}</div><p class="subtitle">Gleich könnt ihr abstimmen, wer die dümmste Antwort gegeben hat.</p></div>`;
+      startLocalTicker(()=>render());
+      return;
+    }
+    app.innerHTML = `
+      ${header()}
+      <div class="card">
+        <h2>Wer war am dümmsten?</h2>
+        <div class="vote-grid">
+          ${active.filter(p=>p.id!==state.myPlayerId).map(p=>`<div class="vote-card" data-vote="${p.id}"><div class="nm">${escapeHtml(p.name)}</div></div>`).join("")}
         </div>
       </div>
     `;
-    document.body.appendChild(overlay);
-    document.getElementById("cancelFinWin").onclick = ()=> overlay.remove();
-    document.getElementById("confirmFinWinBtn").onclick = ()=>{
-      overlay.remove();
-      f.winnerId = p.id;
-      state.phase = "finale-result";
-      render();
-    };
+    app.querySelectorAll("[data-vote]").forEach(el=>{
+      el.onclick = ()=>{
+        playerVote(el.dataset.vote);
+        app.innerHTML = `${header()}<div class="big-status"><div class="icon">✅</div><h2>Stimme abgegeben</h2><p class="subtitle">Warte auf die Entscheidung des Quizmasters …</p></div>`;
+      };
+    });
   }
 
-  function renderFinaleResult(){
-    const f = state.finale;
-    const [a,b] = f.players;
-    const scoreA = f.details[a.id].filter(x=>x.mark==='right').length;
-    const scoreB = f.details[b.id].filter(x=>x.mark==='right').length;
-    const winner = f.players.find(p=>p.id===f.winnerId);
+  function renderPlayerStamp(){
+    const p = state.players.find(x=>x.id===state.session.stamp_player_id);
+    if(p && p.id===state.myPlayerId){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">✈️</div><h2>Du bist ausgeschieden!</h2><div class="placement-badge">${p.placement}. Platz</div></div>`;
+    }else{
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">✈️</div><h2>${p?escapeHtml(p.name):''} ist abgeflogen</h2></div>`;
+    }
+  }
+
+  function renderPlayerWinner(){
+    const winner = state.players.find(p=>p.placement===1);
+    const isMe = winner && winner.id===state.myPlayerId;
+    app.innerHTML = `${header()}<div class="big-status"><div class="icon">${isMe?'🏆':'🛬'}</div><h2>${isMe?'Du hast gewonnen!':(winner?escapeHtml(winner.name)+' gewinnt!':'')}</h2></div>`;
+  }
+
+  function isFinalist(){
+    return state.session.finale_player_ids && state.session.finale_player_ids.includes(state.myPlayerId);
+  }
+
+  function renderPlayerFinaleIntro(){
+    if(!isFinalist()){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🏁</div><h2>Finale läuft</h2><p class="subtitle">Schau aufs Haupt-Gerät — du bist schon ausgeschieden.</p></div>`;
+      return;
+    }
+    app.innerHTML = `${header()}<div class="big-status"><div class="icon">🏁</div><h2>Du bist im Finale!</h2><p class="subtitle">Die Fragen kommen nur beim Quizmaster — hör gut zu und tippe deine Antwort hier ein, sobald es losgeht.</p></div>`;
+  }
+
+  function renderPlayerFinaleQuestion(){
+    if(!isFinalist()){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🏁</div><h2>Finale läuft</h2><p class="subtitle">Schau aufs Haupt-Gerät.</p></div>`;
+      return;
+    }
+    const s = state.session;
+    const mine = state.finaleAnswers.find(a=>a.player_id===state.myPlayerId);
+    if(mine){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">✅</div><h2>Antwort abgeschickt</h2><p class="subtitle">"${escapeHtml(mine.given_answer||'–')}"<br>Warte auf den Quizmaster …</p></div>`;
+      return;
+    }
     app.innerHTML = `
       ${header()}
-      <div class="card winner" id="winnerCard">
-        <div class="trophy">🏆</div>
-        <h2>${winner ? escapeHtml(winner.name)+" gewinnt das Finale!" : "Unentschieden!"}</h2>
-        <p>${escapeHtml(a.name)}: ${scoreA} von ${f.questions.length} richtig · ${escapeHtml(b.name)}: ${scoreB} von ${f.questions.length} richtig</p>
-        <button class="btn-amber btn-lg" id="newGameBtn" style="margin-top:18px;">Neues Spiel</button>
+      <div class="card">
+        <div class="eyebrow" style="justify-content:center;">Frage ${s.finale_question_index+1} von ${s.finale_questions.length}</div>
+        <h2 style="text-align:center;font-family:'Archivo Black',sans-serif;">Deine Antwort?</h2>
+        <div class="row" style="margin-top:14px;"><div><input type="text" id="finAnswerInput" placeholder="Antwort eingeben"></div></div>
+        <button class="btn-amber btn-block btn-lg" id="finSubmitBtn" style="margin-top:14px;">Absenden</button>
       </div>
     `;
-    addConfetti(document.getElementById("winnerCard"));
-    document.getElementById("newGameBtn").onclick = resetToSetup;
+    document.getElementById("finSubmitBtn").onclick = ()=>{
+      const val = document.getElementById("finAnswerInput").value.trim();
+      playerSubmitFinaleAnswer(val);
+    };
+    document.getElementById("finAnswerInput").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("finSubmitBtn").click(); });
+  }
+
+  function renderPlayerFinaleWaiting(){
+    app.innerHTML = `${header()}<div class="big-status"><div class="icon">🧮</div><h2>Der Quizmaster wertet aus …</h2></div>`;
+  }
+
+  function renderPlayerFinaleResult(){
+    const iAmFinalist = isFinalist();
+    const iWon = state.session.finale_winner_id === state.myPlayerId;
+    if(iAmFinalist && iWon){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🏆</div><h2>Du hast gewonnen!</h2></div>`;
+    }else if(iAmFinalist){
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🥈</div><h2>2. Platz!</h2><p class="subtitle">Knapp am Sieg vorbei.</p></div>`;
+    }else{
+      const winner = state.players.find(p=>p.id===state.session.finale_winner_id);
+      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🛬</div><h2>${winner?escapeHtml(winner.name)+' gewinnt!':'Spiel beendet'}</h2></div>`;
+    }
+  }
+
+  /* ---------- Lokaler Timer-Tick (nur fürs Countdown-Display) ---------- */
+  function startLocalTicker(onTick){
+    clearInterval(state.tickId);
+    state.tickId = setInterval(()=>{
+      const el = document.getElementById("timerDisplay");
+      if(!el){ clearInterval(state.tickId); return; }
+      if(onTick){ onTick(); return; }
+      const ref = state.session && (state.session.round_ends_at);
+      if(ref) el.textContent = fmt(secsUntil(ref));
+    }, 1000);
   }
 
   /* ---------------- Init ---------------- */
-  loadQuestions().then(render);
+  async function init(){
+    if(ROLE==="host"){
+      await loadQuestions();
+      render();
+    }else{
+      render(); // Beitrittsformular sofort zeigen
+      subscribeRealtime();
+      await syncAll();
+    }
+  }
+  init();
 })();
+
 </script>
 </body>
 </html>
