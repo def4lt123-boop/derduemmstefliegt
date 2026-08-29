@@ -344,8 +344,29 @@
     font-size:13px;
     padding:20px;
   }
+  #wakeLockBtn{
+    position:fixed;
+    bottom:calc(16px + env(safe-area-inset-bottom));
+    right:calc(16px + env(safe-area-inset-right));
+    z-index:60;
+    width:48px;
+    height:48px;
+    border-radius:50%;
+    border:1px solid var(--border);
+    background:var(--panel);
+    color:var(--amber);
+    font-size:20px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.4);
+    padding:0;
+    min-height:0;
+  }
+  #wakeLockBtn.active{background:var(--amber);color:#211405;border-color:var(--amber);}
 </style>
 <div id="app"><div style="max-width:920px;margin:0 auto;padding:60px 16px;text-align:center;color:#8b93a7;font-family:'Space Mono',monospace;font-size:13px;">Lade …</div></div>
+<button id="wakeLockBtn" title="Bildschirm wach halten">🔆</button>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -410,6 +431,7 @@
     roundMinutes: 3,
     channel: null,
     tickId: null,
+    pollId: null,
     _beepedRoundEnd: null,
     _beepedVoteOpen: null
   };
@@ -618,6 +640,12 @@
       .on("postgres_changes", {event:"*", schema:"public", table:"round_votes", filter:`session_code=eq.${state.code}`}, syncAll)
       .on("postgres_changes", {event:"*", schema:"public", table:"finale_answers", filter:`session_code=eq.${state.code}`}, syncAll)
       .subscribe();
+    if(!state.pollId){
+      // Sicherheitsnetz: falls mal ein Realtime-Event auf dem Weg verloren geht
+      // (z.B. schwaches Mobilfunknetz), holt das hier spätestens nach 4s den
+      // korrekten Stand nach.
+      state.pollId = setInterval(syncAll, 4000);
+    }
   }
 
   /* ============================================================
@@ -851,6 +879,8 @@
   }
 
   function render(){
+    clearInterval(state.tickId);
+    state.tickId = null;
     if(!state.code){
       return state.role==="host" ? renderHostLanding() : renderPlayerNeedsCode();
     }
@@ -1257,7 +1287,7 @@
       app.innerHTML = `
         ${header()}
         <div class="big-status" style="padding-bottom:20px;">
-          <div class="icon">🤔</div><h2>Bedenkzeit</h2><div class="flip">${fmt(wait)}</div>
+          <div class="icon">🤔</div><h2>Bedenkzeit</h2><div class="flip" id="timerDisplay">${fmt(wait)}</div>
           <p class="subtitle">Gleich könnt ihr abstimmen, wer die dümmste Antwort gegeben hat.</p>
         </div>
         <div class="card">
@@ -1265,7 +1295,12 @@
           ${wrongListHtml()}
         </div>
       `;
-      startLocalTicker(()=>render());
+      startLocalTicker(()=>{
+        const left = secsUntil(state.session.voting_opens_at);
+        if(left<=0){ render(); return; }
+        const el = document.getElementById("timerDisplay");
+        if(el) el.textContent = fmt(left);
+      });
       return;
     }
     if(state._beepedVoteOpen !== s.voting_opens_at){
@@ -1394,6 +1429,54 @@
     clearInterval(state.tickId);
     state.tickId = setInterval(()=>{ if(onTick) onTick(); }, 1000);
   }
+
+  /* ---------- Bildschirm wach halten ---------- */
+  let wakeLock = null;
+  let wantWakeLock = false;
+  function updateWakeLockBtn(){
+    const btn = document.getElementById("wakeLockBtn");
+    if(!btn) return;
+    if(wakeLock){
+      btn.textContent = "✅";
+      btn.title = "Bildschirm bleibt an – antippen zum Beenden";
+      btn.classList.add("active");
+    }else{
+      btn.textContent = "🔆";
+      btn.title = "Bildschirm wach halten";
+      btn.classList.remove("active");
+    }
+  }
+  async function requestWakeLock(){
+    if(!("wakeLock" in navigator)) return false;
+    try{
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", ()=>{ wakeLock = null; updateWakeLockBtn(); });
+      return true;
+    }catch(e){ return false; }
+  }
+  async function toggleWakeLock(){
+    if(wakeLock){
+      wantWakeLock = false;
+      try{ await wakeLock.release(); }catch(e){}
+      wakeLock = null;
+      updateWakeLockBtn();
+      return;
+    }
+    if(!("wakeLock" in navigator)){
+      alert("Dein Browser unterstützt das Wachhalten des Bildschirms leider nicht.");
+      return;
+    }
+    wantWakeLock = true;
+    const ok = await requestWakeLock();
+    if(!ok) alert("Bildschirm-Sperre konnte nicht aktiviert werden.");
+    updateWakeLockBtn();
+  }
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.visibilityState==="visible" && wantWakeLock && !wakeLock){
+      requestWakeLock().then(updateWakeLockBtn);
+    }
+  });
+  document.getElementById("wakeLockBtn").onclick = toggleWakeLock;
 
   /* ---------------- Init ---------------- */
   async function init(){
