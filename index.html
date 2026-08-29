@@ -409,7 +409,9 @@
     loadError: null,
     roundMinutes: 3,
     channel: null,
-    tickId: null
+    tickId: null,
+    _beepedRoundEnd: null,
+    _beepedVoteOpen: null
   };
 
   /* ---------------- Helpers ---------------- */
@@ -493,6 +495,37 @@
     state.questions = state.questions.filter(q=>q.id!==id);
     render();
     try{ await supabaseClient.from("questions").delete().eq("id", id); }catch(e){}
+  }
+
+  function qListHtml(filter){
+    const term = (filter||"").toLowerCase().trim();
+    const filtered = term
+      ? state.questions.filter(q=> q.frage.toLowerCase().includes(term) || q.antwort.toLowerCase().includes(term))
+      : state.questions;
+    if(filtered.length===0){
+      return `<div style="color:var(--text-dim);font-size:13px;padding:6px 2px;">Keine Treffer.</div>`;
+    }
+    const shown = filtered.slice(0,300);
+    let html = shown.map(q=>`
+      <div class="qitem">
+        <div class="qtext">
+          ${escapeHtml(q.frage)}
+          <span class="a">${escapeHtml(q.antwort)}${q.anmerkung?` · <em>${escapeHtml(q.anmerkung)}</em>`:""}</span>
+          ${q.used?'<span style="display:block;color:var(--text-dim);font-size:10px;margin-top:2px;">bereits verwendet</span>':""}
+        </div>
+        <button class="btn-ghost" data-delq="${q.id}">✕</button>
+      </div>
+    `).join("");
+    if(filtered.length>300){
+      html += `<div style="color:var(--text-dim);font-size:12px;padding:4px 2px;">… und ${filtered.length-300} weitere. Weiter oben tippen, um einzugrenzen.</div>`;
+    }
+    return html;
+  }
+
+  function bindQListDelete(){
+    document.querySelectorAll("[data-delq]").forEach(b=>{
+      b.onclick = ()=> deleteQuestion(toQId(b.dataset.delq));
+    });
   }
 
   async function markUsedRemote(id){
@@ -625,19 +658,21 @@
       round_ends_at: new Date(Date.now() + state.session.round_seconds*1000).toISOString(),
       current_question: {id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung},
       current_target_player_id: player.id,
-      turn_index: nextTurn
+      turn_index: nextTurn,
+      round_wrong: []
     }).eq("code", state.code);
-    state._roundLog = [];
   }
 
   async function hostNextQuestion(mark){
     const cq = state.session.current_question;
     const targetId = state.session.current_target_player_id;
+    let newWrong = state.session.round_wrong || [];
     if(cq && cq.id!=null){
       const target = state.players.find(p=>p.id===targetId);
-      state._roundLog = state._roundLog || [];
-      state._roundLog.push({frage:cq.frage, antwort:cq.antwort, anmerkung:cq.anmerkung, mark, playerName: target?target.name:"–"});
       markUsedRemote(cq.id);
+      if(mark==="wrong"){
+        newWrong = newWrong.concat([{frage:cq.frage, antwort:cq.antwort, anmerkung:cq.anmerkung, playerName: target?target.name:"–"}]);
+      }
     }
     const unused = state.questions.filter(q=>!q.used);
     const active = activePlayers();
@@ -645,10 +680,10 @@
     const player = active[nextTurn % active.length];
     let update;
     if(unused.length===0){
-      update = { current_question: {id:null, frage:"Keine unverwendeten Fragen mehr übrig.", antwort:"–", anmerkung:null}, turn_index: nextTurn, current_target_player_id: player.id };
+      update = { current_question: {id:null, frage:"Keine unverwendeten Fragen mehr übrig.", antwort:"–", anmerkung:null}, turn_index: nextTurn, current_target_player_id: player.id, round_wrong: newWrong };
     }else{
       const q = shuffle(unused)[0];
-      update = { current_question: {id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung}, turn_index: nextTurn, current_target_player_id: player.id };
+      update = { current_question: {id:q.id, frage:q.frage, antwort:q.antwort, anmerkung:q.anmerkung}, turn_index: nextTurn, current_target_player_id: player.id, round_wrong: newWrong };
     }
     await supabaseClient.from("game_sessions").update(update).eq("code", state.code);
   }
@@ -711,6 +746,8 @@
 
   async function hostMarkFinaleAnswer(playerId, mark){
     const idx = state.session.finale_question_index;
+    const local = state.finaleAnswers.find(a=>a.player_id===playerId);
+    if(local){ local.mark = mark; render(); }
     await supabaseClient.from("finale_answers")
       .update({ mark })
       .eq("session_code", state.code)
@@ -867,6 +904,9 @@
         <div class="row"><div><label>Frage</label><input type="text" id="newQ" placeholder="Neue Frage"></div></div>
         <div class="row" style="margin-top:8px;"><div><label>Lösung</label><input type="text" id="newA" placeholder="Antwort"></div></div>
         <div class="row" style="margin-top:8px;"><div><label>Anmerkung (optional)</label><input type="text" id="newNote" placeholder="Zusatzinfo"></div><button class="btn-outline" id="addQBtn">+ Speichern</button></div>
+        <div class="row" style="margin-top:14px;"><div><label>Suche in der Datenbank</label><input type="text" id="qSearch" placeholder="Frage oder Antwort durchsuchen …"></div></div>
+        <div class="qlist" id="qlist" style="max-height:280px;">${qListHtml("")}</div>
+        <div class="qcount">${pool} Fragen insgesamt, davon ${usedCount} bereits verwendet.</div>
         <div class="row" style="margin-top:12px;"><button class="btn-outline" id="resetPoolBtn">🔄 Fragen-Pool zurücksetzen</button></div>
       </div>
       <button class="btn-amber btn-block btn-lg" id="openRoomBtn">✈ Raum eröffnen</button>
@@ -884,10 +924,15 @@
       if(matches.length>0){ showDuplicateModal(q,a,note,matches); }
       else{ commitQuestion(q,a,note); }
     };
+    document.getElementById("qSearch").addEventListener("input", e=>{
+      document.getElementById("qlist").innerHTML = qListHtml(e.target.value);
+      bindQListDelete();
+    });
     document.getElementById("resetPoolBtn").onclick = ()=>{
       if(confirm("Alle Fragen wieder in den Pool werfen?")) resetQuestionPool();
     };
-    document.getElementById("openRoomBtn").onclick = hostCreateSession;
+    document.getElementById("openRoomBtn").onclick = ()=>{ ensureAudioCtx(); hostCreateSession(); };
+    bindQListDelete();
   }
 
   function showDuplicateModal(q,a,note,matches){
@@ -928,7 +973,7 @@
       document.getElementById("qrHolder").innerHTML = "";
       new QRCode(document.getElementById("qrHolder"), {text:url, width:180, height:180});
     }
-    document.getElementById("startBtn").onclick = hostStartGame;
+    document.getElementById("startBtn").onclick = ()=>{ ensureAudioCtx(); hostStartGame(); };
   }
 
   /* ---------- HOST: Runde ---------- */
@@ -960,7 +1005,21 @@
     document.getElementById("wrongBtn").onclick = ()=>hostNextQuestion("wrong");
     document.getElementById("skipBtn").onclick = ()=>hostNextQuestion("skip");
     document.getElementById("endRoundBtn").onclick = hostEndRound;
-    startLocalTicker();
+    startLocalTicker(()=>{
+      const el = document.getElementById("timerDisplay");
+      const left = secsUntil(state.session.round_ends_at);
+      if(el) el.textContent = fmt(left);
+      if(left<=0 && state._beepedRoundEnd!==state.session.round_ends_at){
+        playBeep();
+        state._beepedRoundEnd = state.session.round_ends_at;
+      }
+    });
+  }
+
+  function wrongListHtml(){
+    const wrong = state.session.round_wrong || [];
+    if(wrong.length===0) return `<p class="subtitle" style="margin:0;">Alles richtig beantwortet in dieser Runde. 🎉</p>`;
+    return `<div class="qlist" style="max-height:none;">${wrong.map(x=>`<div class="qitem"><div class="qtext">${escapeHtml(x.playerName)}: ${escapeHtml(x.frage)}<span class="a">Lösung: ${escapeHtml(x.antwort)}${x.anmerkung?` · <em>${escapeHtml(x.anmerkung)}</em>`:""}</span></div></div>`).join("")}</div>`;
   }
 
   /* ---------- HOST: Voting ---------- */
@@ -968,7 +1027,7 @@
     const active = activePlayers();
     const tally = {};
     state.votes.forEach(v=>{ tally[v.target_id] = (tally[v.target_id]||0)+1; });
-    const wrong = (state._roundLog||[]).filter(x=>x.mark==='wrong');
+    const wrong = state.session.round_wrong || [];
     app.innerHTML = `
       ${header()}
       ${boardStrip()}
@@ -984,7 +1043,7 @@
       </div>
       <div class="card">
         <h2>✗ Falsch beantwortet (${wrong.length})</h2>
-        ${wrong.map(x=>`<div class="qitem"><div class="qtext">${escapeHtml(x.playerName)}: ${escapeHtml(x.frage)}<span class="a">Lösung: ${escapeHtml(x.antwort)}</span></div></div>`).join("") || `<p class="subtitle" style="margin:0;">Alles richtig.</p>`}
+        ${wrongListHtml()}
       </div>
     `;
     app.querySelectorAll("[data-elim]").forEach(el=>{
@@ -1062,8 +1121,8 @@
           ${a ? `
             <div style="margin-bottom:10px;">Antwort: <strong>${a.given_answer?escapeHtml(a.given_answer):'<em style="color:var(--text-dim);">– keine Angabe –</em>'}</strong></div>
             <div class="qbtns" style="margin-top:0;">
-              <button class="btn-teal" data-mark="${p.id}|right" style="${a.mark==='right'?'outline:2px solid var(--teal);':''}">✓ Richtig</button>
-              <button class="btn-danger" data-mark="${p.id}|wrong" style="${a.mark==='wrong'?'outline:2px solid var(--danger);':''}">✗ Falsch</button>
+              <button class="${a.mark==='right'?'btn-teal':'btn-outline'}" data-mark="${p.id}|right">✓ Richtig</button>
+              <button class="${a.mark==='wrong'?'btn-danger':'btn-outline'}" data-mark="${p.id}|wrong">✗ Falsch</button>
             </div>
           ` : `<p class="subtitle" style="margin:0;">Wartet noch auf Antwort …</p>`}
         </div>`;
@@ -1146,6 +1205,7 @@
       </div>
     `;
     document.getElementById("joinBtn").onclick = ()=>{
+      ensureAudioCtx();
       const name = document.getElementById("joinName").value;
       playerJoin(name);
     };
@@ -1177,18 +1237,40 @@
         <div class="answer-waiting">Frage geht gerade an jemand anderen …</div>
       `}
     `;
-    startLocalTicker();
+    startLocalTicker(()=>{
+      const el = document.getElementById("timerDisplay");
+      const left = secsUntil(state.session.round_ends_at);
+      if(el) el.textContent = fmt(left);
+      if(left<=0 && state._beepedRoundEnd!==state.session.round_ends_at){
+        playBeep();
+        state._beepedRoundEnd = state.session.round_ends_at;
+      }
+    });
   }
 
   function renderPlayerVoting(){
     const s = state.session;
     const wait = secsUntil(s.voting_opens_at);
     const active = activePlayers();
-    const already = state.votes && state.votes.some ? false : false;
+    const wrongCount = (s.round_wrong||[]).length;
     if(wait > 0){
-      app.innerHTML = `${header()}<div class="big-status"><div class="icon">🤔</div><h2>Bedenkzeit</h2><div class="flip">${fmt(wait)}</div><p class="subtitle">Gleich könnt ihr abstimmen, wer die dümmste Antwort gegeben hat.</p></div>`;
+      app.innerHTML = `
+        ${header()}
+        <div class="big-status" style="padding-bottom:20px;">
+          <div class="icon">🤔</div><h2>Bedenkzeit</h2><div class="flip">${fmt(wait)}</div>
+          <p class="subtitle">Gleich könnt ihr abstimmen, wer die dümmste Antwort gegeben hat.</p>
+        </div>
+        <div class="card">
+          <h2>✗ Falsch beantwortet (${wrongCount})</h2>
+          ${wrongListHtml()}
+        </div>
+      `;
       startLocalTicker(()=>render());
       return;
+    }
+    if(state._beepedVoteOpen !== s.voting_opens_at){
+      playBeep();
+      state._beepedVoteOpen = s.voting_opens_at;
     }
     app.innerHTML = `
       ${header()}
@@ -1197,6 +1279,10 @@
         <div class="vote-grid">
           ${active.filter(p=>p.id!==state.myPlayerId).map(p=>`<div class="vote-card" data-vote="${p.id}"><div class="nm">${escapeHtml(p.name)}</div></div>`).join("")}
         </div>
+      </div>
+      <div class="card">
+        <h2>✗ Falsch beantwortet (${wrongCount})</h2>
+        ${wrongListHtml()}
       </div>
     `;
     app.querySelectorAll("[data-vote]").forEach(el=>{
@@ -1279,15 +1365,34 @@
   }
 
   /* ---------- Lokaler Timer-Tick (nur fürs Countdown-Display) ---------- */
+  /* ---------- Ton bei Timer-Ende ---------- */
+  let audioCtx = null;
+  function ensureAudioCtx(){
+    if(!audioCtx){
+      try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){}
+    }
+    if(audioCtx && audioCtx.state==="suspended"){ audioCtx.resume(); }
+  }
+  function playBeep(){
+    ensureAudioCtx();
+    if(!audioCtx) return;
+    try{
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.35, audioCtx.currentTime+0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+0.55);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime+0.6);
+    }catch(e){}
+  }
+
   function startLocalTicker(onTick){
     clearInterval(state.tickId);
-    state.tickId = setInterval(()=>{
-      const el = document.getElementById("timerDisplay");
-      if(!el){ clearInterval(state.tickId); return; }
-      if(onTick){ onTick(); return; }
-      const ref = state.session && (state.session.round_ends_at);
-      if(ref) el.textContent = fmt(secsUntil(ref));
-    }, 1000);
+    state.tickId = setInterval(()=>{ if(onTick) onTick(); }, 1000);
   }
 
   /* ---------------- Init ---------------- */
