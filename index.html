@@ -1478,6 +1478,15 @@
   });
   document.getElementById("wakeLockBtn").onclick = toggleWakeLock;
 
+  /* ---------- Schutz vor versehentlichem Neuladen/Schließen ---------- */
+  window.addEventListener("beforeunload", function(e){
+    const joined = state.role==="host" ? !!state.code : !!state.myPlayerId;
+    const finished = state.session && (state.session.phase==="winner" || state.session.phase==="finale-result");
+    if(!joined || finished) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+
   /* ---------------- Init ---------------- */
   async function init(){
     if(ROLE==="host"){
