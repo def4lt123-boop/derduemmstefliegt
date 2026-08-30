@@ -623,13 +623,15 @@
   }
 
   async function syncAll(){
+    const before = JSON.stringify([state.session, state.players, state.votes, state.finaleAnswers, state.allFinaleAnswers]);
     await fetchSession();
     if(!state.session){ render(); return; }
     await fetchPlayers();
     if(state.role==="host" && state.session.phase==="voting") await fetchVotes();
     if(state.session.phase==="finale-question") await fetchFinaleAnswers();
     if(state.role==="host" && state.session.phase==="finale-review") await fetchAllFinaleAnswers();
-    render();
+    const after = JSON.stringify([state.session, state.players, state.votes, state.finaleAnswers, state.allFinaleAnswers]);
+    if(after !== before) render();
   }
 
   function subscribeRealtime(){
@@ -658,6 +660,7 @@
     });
     if(error){ alert("Raum konnte nicht erstellt werden: "+error.message); return; }
     state.code = code;
+    try{ localStorage.setItem("ddf_host_session", code); }catch(e){}
     subscribeRealtime();
     await syncAll();
   }
@@ -831,6 +834,7 @@
     if(error){ alert("Beitreten fehlgeschlagen: "+error.message); return; }
     state.myPlayerId = data.id;
     state.myName = name;
+    try{ localStorage.setItem("ddf_player_session", JSON.stringify({code: state.code, playerId: data.id, name})); }catch(e){}
     subscribeRealtime();
     await syncAll();
   }
@@ -892,6 +896,12 @@
       return renderPlayerJoinForm();
     }
     const phase = state.session.phase;
+    if(phase==="winner" || phase==="finale-result"){
+      try{
+        if(state.role==="host") localStorage.removeItem("ddf_host_session");
+        else localStorage.removeItem("ddf_player_session");
+      }catch(e){}
+    }
     if(state.role==="host"){
       if(phase==="lobby") return renderHostLobby();
       if(phase==="round") return renderHostRound();
@@ -1491,9 +1501,38 @@
   async function init(){
     if(ROLE==="host"){
       await loadQuestions();
-      render();
+      let restored = false;
+      try{
+        const savedCode = localStorage.getItem("ddf_host_session");
+        if(savedCode){
+          const { data } = await supabaseClient.from("game_sessions").select("code").eq("code", savedCode).single();
+          if(data){
+            state.code = savedCode;
+            subscribeRealtime();
+            await syncAll();
+            restored = true;
+          }else{
+            localStorage.removeItem("ddf_host_session");
+          }
+        }
+      }catch(e){}
+      if(!restored) render();
     }else{
-      render(); // Beitrittsformular sofort zeigen
+      let restored = false;
+      try{
+        const saved = JSON.parse(localStorage.getItem("ddf_player_session") || "null");
+        if(saved && saved.code === state.code){
+          const { data } = await supabaseClient.from("session_players").select("id").eq("id", saved.playerId).eq("session_code", state.code).single();
+          if(data){
+            state.myPlayerId = saved.playerId;
+            state.myName = saved.name;
+            restored = true;
+          }else{
+            localStorage.removeItem("ddf_player_session");
+          }
+        }
+      }catch(e){}
+      render();
       subscribeRealtime();
       await syncAll();
     }
