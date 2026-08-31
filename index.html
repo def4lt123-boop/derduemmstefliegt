@@ -382,6 +382,25 @@
     min-height:0;
   }
   #wakeLockBtn.active{background:var(--amber);color:#211405;border-color:var(--amber);}
+  #newRoomBtn{
+    position:fixed;
+    top:calc(16px + env(safe-area-inset-top));
+    right:calc(16px + env(safe-area-inset-right));
+    z-index:60;
+    width:40px;
+    height:40px;
+    border-radius:50%;
+    border:1px solid var(--border);
+    background:var(--panel);
+    color:var(--text-dim);
+    font-size:17px;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    box-shadow:0 4px 14px rgba(0,0,0,.4);
+    padding:0;
+    min-height:0;
+  }
   #madeByFlo{
     position:fixed;
     bottom:calc(14px + env(safe-area-inset-bottom));
@@ -398,6 +417,7 @@
 </style>
 <div id="app"><div style="max-width:920px;margin:0 auto;padding:60px 16px;text-align:center;color:#8b93a7;font-family:'Space Mono',monospace;font-size:13px;">Lade …</div></div>
 <button id="wakeLockBtn" title="Bildschirm wach halten">🔆</button>
+<button id="newRoomBtn" title="Neuen Raum eröffnen">🔁</button>
 <div id="madeByFlo">✈ made by Flo</div>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
@@ -1054,6 +1074,12 @@
   }
 
   /* ---------- HOST: Lobby ---------- */
+  async function hostKickPlayer(playerId){
+    try{ await supabaseClient.from("session_players").delete().eq("id", playerId); }
+    catch(e){}
+    await syncAll();
+  }
+
   function renderHostLobby(){
     const url = joinUrl(state.code);
     app.innerHTML = `
@@ -1066,7 +1092,15 @@
       </div>
       <div class="card">
         <h2>Beigetretene Spieler (${state.players.length})</h2>
-        ${state.players.map(p=>`<div class="lobby-player"><span>${escapeHtml(p.name)}</span><span>${'❤'.repeat(state.session.start_hearts||3)}</span></div>`).join("") || `<p class="subtitle" style="margin:0;">Noch niemand beigetreten.</p>`}
+        ${state.players.map(p=>`
+          <div class="lobby-player">
+            <span>${escapeHtml(p.name)}</span>
+            <span style="display:flex;align-items:center;gap:10px;">
+              ${'❤'.repeat(state.session.start_hearts||3)}
+              <button class="btn-ghost" data-kick="${p.id}" title="Spieler entfernen">✕</button>
+            </span>
+          </div>
+        `).join("") || `<p class="subtitle" style="margin:0;">Noch niemand beigetreten.</p>`}
       </div>
       <button class="btn-amber btn-block btn-lg" id="startBtn" ${state.players.length<2?'disabled style="opacity:.45;"':''}>✈ Spiel starten</button>
       ${state.players.length<2?'<p class="subtitle" style="text-align:center;margin-top:8px;">Mindestens 2 Spieler nötig.</p>':''}
@@ -1076,6 +1110,12 @@
       new QRCode(document.getElementById("qrHolder"), {text:url, width:180, height:180});
     }
     document.getElementById("startBtn").onclick = ()=>{ ensureAudioCtx(); hostStartGame(); };
+    app.querySelectorAll("[data-kick]").forEach(el=>{
+      el.onclick = ()=>{
+        const p = state.players.find(x=>x.id===el.dataset.kick);
+        if(p && confirm(escapeHtml(p.name)+" aus dem Raum entfernen?")) hostKickPlayer(p.id);
+      };
+    });
   }
 
   /* ---------- HOST: Runde ---------- */
@@ -1307,9 +1347,15 @@
       </div>
     `;
     document.getElementById("joinBtn").onclick = ()=>{
+      if(state._joining) return;
+      state._joining = true;
+      const btn = document.getElementById("joinBtn");
+      btn.disabled = true;
+      btn.style.opacity = ".5";
+      btn.textContent = "Beitreten …";
       ensureAudioCtx();
       const name = document.getElementById("joinName").value;
-      playerJoin(name);
+      playerJoin(name).finally(()=>{ state._joining = false; });
     };
     document.getElementById("joinName").addEventListener("keydown", e=>{ if(e.key==="Enter") document.getElementById("joinBtn").click(); });
   }
@@ -1549,6 +1595,17 @@
     }
   });
   document.getElementById("wakeLockBtn").onclick = toggleWakeLock;
+
+  if(ROLE==="host"){
+    const nrBtn = document.getElementById("newRoomBtn");
+    nrBtn.style.display = "flex";
+    nrBtn.onclick = ()=>{
+      if(confirm("Aktuellen Raum verlassen und einen neuen eröffnen? Ein laufendes Spiel geht dabei verloren.")){
+        try{ localStorage.removeItem("ddf_host_session"); }catch(e){}
+        window.location.href = window.location.pathname;
+      }
+    };
+  }
 
   /* ---------- Schutz vor versehentlichem Neuladen/Schließen ---------- */
   window.addEventListener("beforeunload", function(e){
