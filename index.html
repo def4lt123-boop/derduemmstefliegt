@@ -94,6 +94,24 @@
     outline:none;
   }
   input[type=text]:focus,input[type=number]:focus{border-color:var(--amber);}
+  select{
+    width:100%;
+    background:var(--panel-2);
+    border:1px solid var(--border);
+    color:var(--text);
+    font-family:'Manrope',sans-serif;
+    font-size:16px;
+    padding:12px 12px;
+    border-radius:8px;
+    outline:none;
+    appearance:none;
+    -webkit-appearance:none;
+    background-image:linear-gradient(45deg, transparent 50%, var(--amber) 50%), linear-gradient(135deg, var(--amber) 50%, transparent 50%);
+    background-position:calc(100% - 20px) center, calc(100% - 15px) center;
+    background-size:5px 5px, 5px 5px;
+    background-repeat:no-repeat;
+  }
+  select:focus{border-color:var(--amber);}
   .row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;}
   .row > div{flex:1;min-width:140px;}
   button{
@@ -364,9 +382,23 @@
     min-height:0;
   }
   #wakeLockBtn.active{background:var(--amber);color:#211405;border-color:var(--amber);}
+  #madeByFlo{
+    position:fixed;
+    bottom:calc(14px + env(safe-area-inset-bottom));
+    left:calc(14px + env(safe-area-inset-left));
+    z-index:60;
+    font-family:'Space Mono',monospace;
+    font-size:11px;
+    letter-spacing:.04em;
+    color:var(--text-dim);
+    opacity:.6;
+    pointer-events:none;
+    user-select:none;
+  }
 </style>
 <div id="app"><div style="max-width:920px;margin:0 auto;padding:60px 16px;text-align:center;color:#8b93a7;font-family:'Space Mono',monospace;font-size:13px;">Lade …</div></div>
 <button id="wakeLockBtn" title="Bildschirm wach halten">🔆</button>
+<div id="madeByFlo">✈ made by Flo</div>
 
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -428,7 +460,8 @@
     allFinaleAnswers: [],      // Mirror aller finale_answers der Session (für die Finale-Übersicht)
     questions: [],             // Fragen-Datenbank (nur Host, für Verwaltung + Ziehen)
     loadError: null,
-    roundMinutes: 3,
+    roundSeconds: 180,
+    startHearts: 3,
     channel: null,
     tickId: null,
     pollId: null,
@@ -656,7 +689,7 @@
   async function hostCreateSession(){
     const code = makeRoomCode();
     const { error } = await supabaseClient.from("game_sessions").insert({
-      code, phase:"lobby", round_seconds: state.roundMinutes*60
+      code, phase:"lobby", round_seconds: state.roundSeconds, start_hearts: state.startHearts
     });
     if(error){ alert("Raum konnte nicht erstellt werden: "+error.message); return; }
     state.code = code;
@@ -828,8 +861,9 @@
   async function playerJoin(name){
     name = name.trim();
     if(!name) return;
+    const startHearts = (state.session && state.session.start_hearts) || 3;
     const { data, error } = await supabaseClient.from("session_players")
-      .insert({session_code: state.code, name, hearts:3})
+      .insert({session_code: state.code, name, hearts: startHearts})
       .select().single();
     if(error){ alert("Beitreten fehlgeschlagen: "+error.message); return; }
     state.myPlayerId = data.id;
@@ -877,7 +911,7 @@
     return `<div class="board">${state.players.map(p=>`
       <div class="board-item ${p.is_out?'out':''} ${p.id===askingId?'asking':''}">
         <div class="nm">${escapeHtml(p.name)}</div>
-        <div class="hearts">${'❤'.repeat(p.hearts)}${'♡'.repeat(Math.max(0,3-p.hearts))}</div>
+        <div class="hearts">${'❤'.repeat(p.hearts)}${'♡'.repeat(Math.max(0,(state.session.start_hearts||3)-p.hearts))}</div>
         <div class="status">${p.is_out?('✈ '+ (p.placement?p.placement+'. Platz':'raus')):(p.id===askingId?'jetzt dran':'boarding')}</div>
       </div>`).join("")}</div>`;
   }
@@ -937,7 +971,33 @@
       ${state.loadError ? `<div class="card" style="border-color:var(--danger);"><h2 style="color:var(--danger);">Hinweis</h2><p class="subtitle" style="margin:0;">${escapeHtml(state.loadError)}</p></div>` : ""}
       <div class="card">
         <h2>Rundendauer</h2>
-        <div class="row"><div><label>Minuten pro Runde</label><input type="text" inputmode="numeric" id="roundMinutes" value="${state.roundMinutes}"></div></div>
+        <div class="row">
+          <div>
+            <label>Dauer pro Runde</label>
+            <select id="roundSeconds">
+              <option value="60" ${state.roundSeconds===60?"selected":""}>1:00 Minute</option>
+              <option value="90" ${state.roundSeconds===90?"selected":""}>1:30 Minuten</option>
+              <option value="120" ${state.roundSeconds===120?"selected":""}>2:00 Minuten</option>
+              <option value="150" ${state.roundSeconds===150?"selected":""}>2:30 Minuten</option>
+              <option value="180" ${state.roundSeconds===180?"selected":""}>3:00 Minuten</option>
+              <option value="210" ${state.roundSeconds===210?"selected":""}>3:30 Minuten</option>
+              <option value="240" ${state.roundSeconds===240?"selected":""}>4:00 Minuten</option>
+              <option value="300" ${state.roundSeconds===300?"selected":""}>5:00 Minuten</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Herzen pro Spieler</h2>
+        <div class="row">
+          <div>
+            <label>Anzahl Herzen</label>
+            <select id="startHearts">
+              <option value="2" ${state.startHearts===2?"selected":""}>2 Herzen</option>
+              <option value="3" ${state.startHearts===3?"selected":""}>3 Herzen</option>
+            </select>
+          </div>
+        </div>
       </div>
       <div class="card">
         <h2>Fragen-Datenbank (${pool} Fragen, ${usedCount} verwendet)</h2>
@@ -951,9 +1011,11 @@
       </div>
       <button class="btn-amber btn-block btn-lg" id="openRoomBtn">✈ Raum eröffnen</button>
     `;
-    document.getElementById("roundMinutes").onchange = e=>{
-      const v = parseInt(e.target.value,10);
-      if(v>=1 && v<=15) state.roundMinutes = v;
+    document.getElementById("roundSeconds").onchange = e=>{
+      state.roundSeconds = parseInt(e.target.value,10);
+    };
+    document.getElementById("startHearts").onchange = e=>{
+      state.startHearts = parseInt(e.target.value,10);
     };
     document.getElementById("addQBtn").onclick = ()=>{
       const q = document.getElementById("newQ").value.trim();
@@ -1004,7 +1066,7 @@
       </div>
       <div class="card">
         <h2>Beigetretene Spieler (${state.players.length})</h2>
-        ${state.players.map(p=>`<div class="lobby-player"><span>${escapeHtml(p.name)}</span><span>❤❤❤</span></div>`).join("") || `<p class="subtitle" style="margin:0;">Noch niemand beigetreten.</p>`}
+        ${state.players.map(p=>`<div class="lobby-player"><span>${escapeHtml(p.name)}</span><span>${'❤'.repeat(state.session.start_hearts||3)}</span></div>`).join("") || `<p class="subtitle" style="margin:0;">Noch niemand beigetreten.</p>`}
       </div>
       <button class="btn-amber btn-block btn-lg" id="startBtn" ${state.players.length<2?'disabled style="opacity:.45;"':''}>✈ Spiel starten</button>
       ${state.players.length<2?'<p class="subtitle" style="text-align:center;margin-top:8px;">Mindestens 2 Spieler nötig.</p>':''}
@@ -1266,7 +1328,7 @@
       <div class="timer-wrap"><div class="flip" id="timerDisplay">${fmt(timeLeft)}</div></div>
       <div class="card" style="text-align:center;">
         <div style="color:var(--text-dim);font-size:12px;">${activePlayers().length} Spieler noch im Rennen</div>
-        <div class="hearts" style="font-size:20px;margin-top:6px;">${'❤'.repeat(me?me.hearts:0)}${'♡'.repeat(Math.max(0,3-(me?me.hearts:0)))}</div>
+        <div class="hearts" style="font-size:20px;margin-top:6px;">${'❤'.repeat(me?me.hearts:0)}${'♡'.repeat(Math.max(0,(s.start_hearts||3)-(me?me.hearts:0)))}</div>
       </div>
       ${isMe ? `
         <div class="card qcard">
